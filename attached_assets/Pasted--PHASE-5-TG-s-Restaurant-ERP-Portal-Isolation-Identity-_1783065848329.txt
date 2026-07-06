@@ -1,0 +1,373 @@
+# PHASE 5 — TG's Restaurant ERP: Portal Isolation, Identity-Aware Sessions, Staff Management, Audit Engine & Settings
+### (ቲጂ ምግብ ቤት — Replit Agent Brief)
+
+Read every section fully before writing a single line of code. This phase is about **security architecture and identity** — making every portal strictly scoped, every action attributed to the exact person who did it, and giving the admin full control over who exists in the system and what they can touch.
+
+---
+
+## 0. WHAT THIS PHASE FIXES AND ADDS
+
+Currently the system has portals but the access boundaries are enforced only at the UI level — a delivery man who knows the admin URL could potentially navigate there. Staff members may not have truly individual credentials. Chef acceptance doesn't record *which* chef accepted. The Settings page for API keys (Twilio, WhatsApp webhook) doesn't exist as a proper admin-managed UI. Audit/export tools are missing. This phase closes all of those gaps completely.
+
+**Summary of changes:**
+1. True server-side portal isolation — every role locked to exactly one portal, enforced at the API middleware level
+2. Super Admin manages all staff (create/edit/delete Admins, Delivery Staff, Chefs, Addis Staff) from one unified Staff Management section
+3. Every staff member has their own personal login credentials — the system always knows exactly who is acting
+4. Chef identity captured on every order action — which chef accepted, which chef marked ready, timestamp, busy status
+5. Daily and weekly audit CSV export engine
+6. Full API Settings panel — admin manages Twilio, WhatsApp webhook, SendGrid, exchange rates, and all integration config from inside the ERP
+
+---
+
+## 1. PORTAL ACCESS MAP — STRICT ENFORCEMENT
+
+This is the single source of truth for who can access what. Enforce this at the **API middleware level** (JWT role check on every route), not just by hiding nav items in the frontend.
+
+| Role | Portal / URL | Can Access | Cannot Access |
+|---|---|---|---|
+| `super_admin` | `/admin/*` | Entire ERP Command Center — all modules, all branches, all staff, settings, audit export | Nothing is off-limits |
+| `branch_manager` | `/admin/*` | Command Center scoped to their branch — orders, finance, staff for their branch only | Other branches, system settings, super admin management |
+| `chef` | `/kitchen/*` | Chef Portal only | Any `/admin/*` route, Deliveryman Portal, Addis Portal |
+| `delivery_staff` | `/delivery/*` | Deliveryman Portal only | Any `/admin/*` route, Chef Portal, Addis Portal |
+| `order_intake` | `/admin/order-queue` only | The Order Queue intake view and nothing else inside admin | All other admin pages |
+| `addis_staff` | `/addis/*` | Addis Ababa Supply Chain Portal only | Any `/admin/*` route, Chef Portal, Deliveryman Portal |
+
+**Implementation rules:**
+- Every Express route is protected by a middleware function `requireRole(...allowedRoles)` that reads the JWT, verifies the role, and returns `403 Forbidden` if the role doesn't match — before any handler logic runs.
+- The frontend login flow reads the role from the JWT response and **hard-redirects** to the correct portal URL. A chef who tries to manually navigate to `/admin/finance` gets a 403 from the API on every data request — the page is useless even if they somehow load the shell.
+- There are no shared route prefixes between portals. `/admin/*`, `/kitchen/*`, `/delivery/*`, `/addis/*` are completely separated route trees.
+- Session tokens (JWT) encode: `user_id`, `role`, `branch_id`, `name`, `email` — this payload is available on every authenticated request server-side without an extra DB query.
+
+---
+
+## 2. SUPER ADMIN — STAFF MANAGEMENT MODULE
+
+### 2.1 What the Super Admin Can Do
+
+The Super Admin has a dedicated **Staff Management** section in the Command Center with full CRUD over all user accounts across all roles and branches:
+
+**Manage Super Admins:**
+- View list of all Super Admin accounts
+- Add new Super Admin: name, phone, email, password (auto-generated or set manually), branch access (all branches or specific)
+- Edit: name, phone, email, branch scope
+- Delete / Deactivate: soft-delete (`active = false`) — removes login access, preserves all historical audit data
+- A Super Admin cannot delete their own account (prevent lockout)
+
+**Manage Branch Managers:**
+- Same CRUD as above, plus mandatory branch assignment
+
+**Manage Chefs:**
+- Add chef: full name, phone number, assigned branch, profile photo (optional), start date
+- System auto-generates login credentials: a username (e.g., `chef.kebede`) and a temporary password (e.g., `TG@2026`) — displayed once to the admin to share with the chef
+- Edit chef details, reassign branch, reset password
+- Deactivate chef (preserves all order history attributed to them)
+- View chef's performance metrics inline: total orders prepared this month, average prep time, currently active/idle status
+
+**Manage Delivery Staff:**
+- Add delivery person: full name, phone number, assigned branch, profile photo (optional), start date, commission rate (AED per delivery or % of order total — as configured)
+- Auto-generate login credentials same as chefs
+- Edit, reassign branch, reset password, deactivate
+- View performance inline: today's deliveries, this month's deliveries, total commission earned, current status (available/delivering)
+
+**Manage Order Intake Staff:**
+- Same CRUD pattern — these are the staff who work the WhatsApp voice queue
+
+**Manage Addis Staff:**
+- Same CRUD pattern — these staff only exist to log import shipments
+
+### 2.2 Credential Delivery
+
+When a new staff member is created:
+- System generates a clean temporary password
+- **If Twilio is configured:** automatically sends an SMS to their phone number with their login URL, username, and temporary password
+- **If Twilio is not yet configured:** shows the credentials on screen with a copy button so admin can share manually via WhatsApp
+- Staff member must be prompted to change their password on first login (add `password_changed` boolean to `users` table, redirect to change-password screen if false)
+
+### 2.3 Staff List UI
+
+The Staff Management page in the Command Center:
+- Tabs across the top: All Staff | Chefs | Delivery | Order Intake | Addis | Admins
+- Each tab shows a clean card grid or table with: profile photo/avatar, name, role badge, branch, status (Active/Inactive), current live status (for operational roles: Online/Offline, Busy/Available), quick-action buttons (Edit, Reset Password, Deactivate)
+- Search and filter by branch, role, status
+- "Add Staff" button opens a role-specific form modal (different fields depending on which tab is active)
+- Bulk actions: deactivate multiple, reassign branch
+
+---
+
+## 3. IDENTITY-AWARE SESSIONS — EVERY ACTION ATTRIBUTED
+
+### 3.1 The Core Principle
+
+The JWT token carried by every authenticated request contains `user_id`, `name`, `role`, and `branch_id`. Every single write operation to the database (create, update, delete) must use the `user_id` from the verified JWT — never from the request body. This means:
+
+- A delivery staff member cannot claim to be someone else by passing a different `user_id` in their request body — the server ignores any `user_id` in the body and uses only the one from the verified token.
+- All attribution (who created this order, who accepted it, who delivered it, who logged this expense) flows from the server-side JWT, making the audit trail tamper-proof from the client side.
+
+### 3.2 Delivery Staff Identity
+
+When Kebede Alemu logs into the Deliveryman Portal:
+- The portal header shows "Welcome, Kebede ✋" — his name pulled from the JWT
+- When he submits a Relay Order, `relayed_by_user_id` is set server-side from his JWT — he never selects his own name from a dropdown
+- When he claims a delivery, `assigned_delivery_user_id` is set from his JWT atomically
+- His commission accrues to his `user_id` automatically on every "Delivered" confirmation
+- The Admin Command Center shows "Kebede Alemu — 4 deliveries today — AED 28 commission" with real data
+- His `current_status` field in the `users` table updates automatically: `"available"` when he's logged in with no active delivery, `"delivering"` the moment he claims an order, back to `"available"` when he marks it delivered
+
+### 3.3 Chef Identity — New Requirement
+
+Currently the system knows an order was "accepted" but not by whom. Fix this fully:
+
+**Chef selection on login (not on every order):**
+- When a chef logs into the Kitchen Portal, the system already knows exactly who they are from their JWT — their name is displayed prominently at the top of the KDS ("Chef Tigist's Kitchen 👩‍🍳")
+- No per-order chef selection dropdown needed — the system attributes all actions on that session to that chef automatically
+
+**What gets recorded per chef action:**
+- `orders.accepted_by_user_id` = chef's `user_id` (already specced in Phase 3 — confirm it's actually being set from JWT server-side, not left null)
+- `orders.accepted_at` = server timestamp
+- `orders.marked_ready_by_user_id` = chef's `user_id` (add this column if not present)
+- `orders.marked_ready_at` = server timestamp
+
+**Chef busy/available status:**
+- Add `chef_status` enum to the `users` table for chef role: `"available"`, `"preparing"`, `"break"`
+- When a chef accepts an order → `chef_status = "preparing"` automatically
+- When a chef marks an order ready → if they have no other orders in `preparing` state → `chef_status = "available"` automatically
+- The Admin Command Center's live staff view shows each chef's real-time status: green "Available" or amber "Preparing — Order #TG-042"
+- The Chef Portal header shows their own status ("You are: Preparing Order #TG-042") so they're aware of their tracked state
+
+**Chef workload visibility in Command Center:**
+- "Active Chefs" panel: each chef currently logged in, their status, which order they're on, how long they've been preparing it
+- Chef performance report (filterable by date range): total orders prepared, average prep time, fastest prep, slowest prep — all computed from real `accepted_at` and `marked_ready_at` timestamps
+
+---
+
+## 4. DAILY & WEEKLY AUDIT CSV EXPORT ENGINE
+
+### 4.1 What Gets Exported
+
+Build a dedicated **Reports & Audit** section in the Admin Command Center (Super Admin and Branch Manager access). Exports are generated on-demand and downloaded as CSV files directly in the browser.
+
+**Report types available:**
+
+**Daily Order Audit (CSV):**
+Columns: Date, Order Code, Queue Number, Channel (WhatsApp Voice / WhatsApp Relay / Webapp), Customer Name, Customer Phone, Branch, Items Ordered (semicolon-separated), Total AED, Status, Created At, Accepted By (Chef Name), Accepted At, Prep Time (minutes), Marked Ready At, Claimed By (Rider Name), Claimed At, Picked Up At, Delivered At, Delivery Duration (minutes), Commission Paid (AED), Lottery Number Issued, Lottery Number
+
+**Weekly Revenue Summary (CSV):**
+Columns: Date, Branch, Total Orders, Total Revenue AED, Total Delivery Commissions AED, Total Import Costs AED (from Addis module), Net Revenue AED, WhatsApp Orders Count, Webapp Orders Count, Average Order Value AED, Lottery Entries Issued, Draw Winner Count
+
+**Staff Activity Audit (CSV):**
+Columns: Staff Name, Role, Branch, Date, Actions Count, Specific Actions (orders relayed / orders delivered / orders prepared / shipments logged), Commission Earned AED, Hours Active (first action to last action timestamp delta), Login Time, Last Activity Time
+
+**Inventory & Waste Report (CSV):**
+Columns: Date, Branch, Item Name, Opening Stock, Units Consumed (from order completions), Waste Logged, Closing Stock, Restock Orders Created
+
+**Import Supply Chain Report (CSV):**
+Columns: Shipment Reference, Supplier, Sent Date, Received Date, Items (semicolon-separated), Total Value ETB, Total Value AED, Amount Paid AED, Outstanding Balance AED, Status
+
+### 4.2 Export UI
+
+In the Reports & Audit page:
+- Report type selector (dropdown)
+- Date range picker (for daily/weekly reports) or week picker (for weekly summary)
+- Branch selector (All Branches or specific — Super Admin only sees all; Branch Manager locked to their branch)
+- **"Generate & Download CSV"** button — triggers server-side query, streams the CSV response directly to the browser as a file download (use `Content-Disposition: attachment; filename="TG-Orders-2026-07-01.csv"`)
+- No storing of generated reports server-side — generate fresh on demand every time
+
+### 4.3 Automated Daily Audit Email (Optional — if SendGrid configured)
+
+If SendGrid is configured in Settings:
+- A daily cron job at 11:59 PM UAE time auto-generates the Daily Order Audit CSV for each branch and emails it to the Branch Manager and Super Admin
+- Email subject: "TG's Restaurant — Daily Report [Branch Name] — [Date]"
+- CSV attached
+- A "Toggle daily email report" switch in Settings → Reports to enable/disable this
+
+### 4.4 Server-Side CSV Generation
+
+Use a lightweight CSV library (e.g., `csv-stringify` or manual string building) — do not use any client-side CSV generation. The query must run on the server, join the necessary tables, format the data, and stream it back. For large date ranges, use streaming response (`res.setHeader('Content-Type', 'text/csv')` with a streaming query) to avoid memory pressure.
+
+---
+
+## 5. SETTINGS PANEL — FULL API & INTEGRATION MANAGEMENT
+
+### 5.1 Overview
+
+A dedicated **Settings** section in the Admin Command Center (Super Admin only) with clearly separated sub-sections. All sensitive values (API keys, tokens) are stored **encrypted at rest** in the database (`settings` table) — never in plain `.env` only (so the admin can update them without touching server files or redeploying). On startup, the server reads from the database first, falls back to environment variables if the DB value is empty.
+
+The Settings page shows all sensitive values **masked** (e.g., `ghp_••••••••••••3f8a`) with a "Reveal" toggle (requires re-authentication — admin must enter their password to reveal the raw value) and an "Edit" button that opens an input field to update it.
+
+### 5.2 Settings Sub-Sections
+
+---
+
+**Section A — WhatsApp & Twilio Integration**
+
+| Setting | Field | Notes |
+|---|---|---|
+| Twilio Account SID | Text input (masked) | `ACxxxxxxxxxxxxxxxx` format |
+| Twilio Auth Token | Text input (masked) | Sensitive — reveal requires password |
+| WhatsApp Business Number | Text input | Format: `whatsapp:+971xxxxxxxxx` |
+| WhatsApp Sandbox Mode | Toggle | If ON, uses Twilio sandbox number for testing |
+| Incoming Webhook URL | Read-only display | Shows `https://[your-replit-url]/api/whatsapp/incoming` — copy button — this is what the admin pastes into Twilio console |
+| Webhook Verification Token | Auto-generated, copyable | For Meta/Twilio webhook signature verification |
+| Test Connection | Button | Sends a real test WhatsApp message to a number the admin types in, reports success/failure live |
+| Auto-reply template (EN) | Textarea | The English part of the queue number auto-reply — editable |
+| Auto-reply template (AM) | Textarea | The Amharic part — editable |
+| Lucky number message template (EN) | Textarea | Editable template with `{{lucky_number}}`, `{{draw_time}}` placeholders |
+| Lucky number message template (AM) | Textarea | Amharic version |
+| Winner notification template (EN) | Textarea | With `{{lucky_number}}`, `{{prize}}` placeholders |
+| Winner notification template (AM) | Textarea | Amharic version |
+| Delivery confirmation template (EN) | Textarea | Sent on order delivered |
+| Delivery confirmation template (AM) | Textarea | Amharic version |
+
+All message templates are stored in the `settings` table and pulled by the `sendWhatsAppMessage()` function — changing them here instantly affects all future messages without any code change or redeploy.
+
+---
+
+**Section B — SendGrid / Email**
+
+| Setting | Field |
+|---|---|
+| SendGrid API Key | Text input (masked) |
+| From Email Address | Text input |
+| From Name | Text input (e.g., "TG's Restaurant") |
+| Daily Report Email Recipients | Multi-email input (comma-separated) |
+| Enable Daily Report Email | Toggle |
+| Test Connection | Button — sends a test email to a specified address |
+
+---
+
+**Section C — Lottery Configuration**
+
+| Setting | Field |
+|---|---|
+| Daily draw time | Time picker (UAE timezone) |
+| Auto-run draw | Toggle — if OFF, manager must run manually |
+| Prize tiers | Dynamic list — add/edit/remove tiers (name, winner count, prize description) |
+| Eligibility rule | Dropdown: "All confirmed orders" / "Orders above AED [X]" |
+| Minimum order AED threshold | Number input (only shown if above rule selected) |
+
+---
+
+**Section D — Addis Ababa / Import Settings**
+
+| Setting | Field |
+|---|---|
+| ETB → AED exchange rate | Number input (manual — admin updates as needed) |
+| Last updated | Read-only timestamp |
+| Credit overdue threshold (days) | Number input (default: 30) — alerts fire if credit is unpaid beyond this |
+| Import cost category label | Text input (default: "Import Costs (Addis)") — appears in Finance P&L |
+
+---
+
+**Section E — System & Security**
+
+| Setting | Field |
+|---|---|
+| Restaurant name | Text input |
+| Default branch | Dropdown |
+| UAE timezone | Read-only (UTC+4) — displayed for reference |
+| Session timeout (minutes) | Number input (default: 60) |
+| Max failed login attempts before lockout | Number input (default: 5) |
+| Lockout duration (minutes) | Number input (default: 30) |
+| Force 2FA for Super Admins | Toggle — if ON, Super Admins must verify via SMS on login |
+| Audit log retention (days) | Number input (default: 365) |
+
+---
+
+**Section F — Cron Job Monitor** (already specced in Phase 4 — confirm it lives here in Settings)
+
+All scheduled jobs displayed with:
+- Job name, schedule, last run time, last run status, last run message
+- Manual "Run Now" button
+- Last 5 run history mini-bar
+
+---
+
+### 5.3 Settings Storage Architecture
+
+New `settings` table:
+- `id`, `key` (unique text — e.g., `"twilio_account_sid"`), `value` (text — encrypted for sensitive keys), `is_sensitive` (boolean), `updated_by_user_id`, `updated_at`
+- Build a server-side `getSetting(key)` and `setSetting(key, value)` helper used everywhere in the codebase instead of `process.env.XXX` — this makes every integration config admin-manageable without environment variable changes
+- For non-sensitive settings (restaurant name, draw time, exchange rate) store plain text value
+- For sensitive settings (API keys, tokens) encrypt value at rest using AES-256 with a master key that IS stored in environment variables (`SETTINGS_ENCRYPTION_KEY`) — so the master key never touches the DB, but the actual API keys do (encrypted)
+
+---
+
+## 6. ADDITIONAL SECURITY HARDENING
+
+### 6.1 Login Security
+
+- Track failed login attempts in a `login_attempts` table: `user_id`, `ip_address`, `attempted_at`, `success`
+- After N failed attempts (from Settings) within 30 minutes → lock the account for the configured lockout duration
+- Locked account shows a clear message: "Account locked. Try again in [X] minutes or contact your admin."
+- Super Admin can manually unlock any account from the Staff Management page
+- All login attempts (success and failure) visible in the Audit section
+
+### 6.2 Portal URL Guards
+
+- Each portal (`/kitchen/*`, `/delivery/*`, `/addis/*`) must check on load that the logged-in user's role matches the portal — if not, immediately redirect to the correct portal for their role (not just show an error)
+- Example: if Kebede (delivery_staff) somehow loads `/kitchen`, the frontend immediately redirects him to `/delivery` without showing any kitchen data
+
+### 6.3 Password Policy
+
+- Minimum 8 characters, at least one number, at least one letter — enforced server-side on all password sets/changes
+- Bcrypt hashing with salt rounds ≥ 12
+- Temporary passwords generated by admin use the pattern `TG@[4 random digits][2 random letters]` (e.g., `TG@3847xm`) — strong enough for a temp password, memorable enough to communicate verbally
+
+---
+
+## 7. VERIFICATION CHECKLIST
+
+**Portal Isolation:**
+- [ ] A chef's JWT cannot access any `/admin/*` API route — returns 403.
+- [ ] A delivery staff JWT cannot access any `/kitchen/*` or `/admin/*` API route — returns 403.
+- [ ] An addis_staff JWT cannot access any `/admin/*`, `/kitchen/*`, or `/delivery/*` route — returns 403.
+- [ ] Logging in as any role redirects immediately to that role's portal — not the admin dashboard even for a moment.
+
+**Staff Management:**
+- [ ] Super Admin can create a chef account — credentials auto-generated and shown/SMS'd.
+- [ ] New chef can log in with generated credentials and is forced to change password on first login.
+- [ ] Deactivating a staff account immediately invalidates their active sessions (JWT blacklist or short expiry enforcement).
+- [ ] Super Admin cannot delete their own account.
+
+**Identity Attribution:**
+- [ ] Every order relay by Kebede sets `relayed_by_user_id` from his JWT server-side — not from any client-supplied field.
+- [ ] Every chef order acceptance sets `accepted_by_user_id` and `accepted_at` from the JWT and server timestamp.
+- [ ] Chef status updates to "preparing" on accept and "available" on ready (if no other active orders).
+- [ ] Admin Command Center shows each chef's real-time status with their current order.
+
+**Audit CSV Export:**
+- [ ] Daily Order Audit CSV downloads with all specified columns, real data, correct date filtering.
+- [ ] Weekly Revenue Summary CSV correct totals matching Finance module figures.
+- [ ] Staff Activity Audit correctly attributes actions to named individuals.
+- [ ] All exports work for both "All Branches" (Super Admin) and single-branch (Manager) scope.
+
+**Settings Panel:**
+- [ ] Twilio SID/Token/Number saved via Settings panel are actually used by the WhatsApp send function — changing them takes effect immediately without server restart.
+- [ ] WhatsApp message templates edited in Settings are used for the next outgoing message — no hardcoded strings in the codebase.
+- [ ] "Test Connection" buttons actually send a real test message/email and report back success or failure.
+- [ ] Sensitive setting values are masked in the UI and require password re-entry to reveal.
+- [ ] Exchange rate change in Settings is reflected in the next Addis shipment AED calculation.
+
+---
+
+## 8. FINAL INSTRUCTION TO REPLIT AGENT
+
+Build in this exact order:
+
+1. **Settings table + getSetting/setSetting helper** — everything else depends on this. Once it exists, migrate all `process.env` API key reads in existing code to use `getSetting()` with an env-variable fallback. Do this before building the Settings UI.
+
+2. **RBAC middleware hardening** — add `requireRole()` to every existing route that doesn't already have it. Test that a chef JWT gets 403 on an admin route before moving on.
+
+3. **Staff Management CRUD in Admin** — build the full add/edit/deactivate flows for all roles with credential generation and optional SMS delivery.
+
+4. **Identity attribution fixes** — confirm `accepted_by_user_id`, `relayed_by_user_id`, `assigned_delivery_user_id` are all being set from JWT server-side on every relevant route. Fix any that are missing or being set from client body instead.
+
+5. **Chef busy/available status** — add `chef_status` to users, wire the auto-update on accept/ready transitions.
+
+6. **Login security** — failed attempt tracking, lockout, first-login password change enforcement.
+
+7. **Settings UI panel** — build the full Settings page with all six sub-sections against the now-working backend.
+
+8. **CSV Audit Export** — build the Reports & Audit page with all five report types, server-side generation, streaming download.
+
+Do not consider this phase complete until every item in the verification checklist passes with real data. Pay particular attention to the portal isolation check — test it by logging in as a chef and attempting to call an admin API route directly (e.g., via browser fetch in the console) and confirming a 403 is returned.

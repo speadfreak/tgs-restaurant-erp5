@@ -1,0 +1,285 @@
+# PHASE 6 — TG's Restaurant ERP: Critical Bug Fixes & Architectural Corrections
+### (ቲጂ ምግብ ቤት — Replit Agent Brief)
+
+Read every section fully before touching any code. This phase is about fixing broken cross-portal data flow, removing walk-in order logic entirely, and upgrading the lottery engine to manual-copy mode. Do not add new features outside what is listed here. Fix what is broken first, then make the targeted additions.
+
+---
+
+## 0. ROOT CAUSE SUMMARY
+
+After the Phase 5 portal isolation work, three things broke:
+
+1. **Delivery portal is isolated but data-starved** — the delivery staff can log in but sees no ready orders and no menu. This means the delivery portal's API calls are either hitting wrong endpoints, carrying wrong branch scoping, or the backend routes are rejecting the delivery staff JWT on data-fetch routes they should be allowed to read.
+
+2. **Chef portal is isolated but order-starved** — a chef (e.g. Aberash) logs in and sees no incoming orders from the delivery staff portal. This means either the Socket.IO room wiring is wrong for role-scoped sessions, or the kitchen queue API endpoint is rejecting the chef JWT, or orders created by delivery staff are not being emitted to the correct kitchen Socket.IO room.
+
+3. **Walk-in order channel still exists** — this restaurant is delivery-only. The `walk_in` channel and any related UI/logic must be fully removed from the entire codebase.
+
+Additionally, the lottery engine needs a targeted change: lucky numbers should generate automatically when an order code is created, be visible in the admin panel, and the admin copies and sends them manually — no automated Twilio send for lucky numbers (keep Twilio only for winner notifications if configured).
+
+Fix these in the exact order listed below.
+
+---
+
+## 1. FIX — DELIVERY PORTAL: MENU NOT LOADING
+
+### What's broken
+The delivery staff portal's menu picker (used in the Relay Order tab to select food items) is showing empty. The menu data exists in the database — it's showing correctly in the admin panel. The delivery portal is not fetching it correctly after the Phase 5 role-scoping changes.
+
+### How to fix
+
+**Step 1 — Audit the menu API endpoint:**
+Find the Express route that serves menu items (e.g. `GET /api/menu/items` or `GET /api/menu`). Check its middleware stack. After Phase 5, it likely has `requireRole('super_admin', 'branch_manager')` or similar that excludes `delivery_staff`. 
+
+**Fix:** The menu read endpoint must allow ALL authenticated roles to fetch menu data — chefs, delivery staff, order intake staff, and admins all need to read the menu. Change the middleware to `requireAuth` (any valid JWT) for read operations (GET), while keeping write operations (POST, PUT, DELETE — add/edit/delete menu items) restricted to `super_admin` and `branch_manager` only.
+
+The correct pattern:
+```
+GET  /api/menu/items     → requireAuth (all roles can read)
+GET  /api/menu/categories → requireAuth (all roles can read)
+POST /api/menu/items     → requireRole('super_admin', 'branch_manager')
+PUT  /api/menu/items/:id → requireRole('super_admin', 'branch_manager')
+DELETE /api/menu/items/:id → requireRole('super_admin', 'branch_manager')
+```
+
+**Step 2 — Confirm branch scoping:**
+The delivery staff JWT contains their `branch_id`. The menu fetch must return items for their branch (or items marked as available for all branches). Confirm the GET menu endpoint filters by `branch_id` from the JWT, not from a query param that the client could manipulate.
+
+**Step 3 — Test:** Log in as a delivery staff member, open the Relay Order tab, confirm the menu categories and items load correctly. Items marked unavailable should show with a red "Unavailable" badge and be non-selectable.
+
+---
+
+## 2. FIX — DELIVERY PORTAL: READY ORDERS NOT APPEARING
+
+### What's broken
+Orders that a chef marks as "Ready" in the Chef Portal are not appearing in the logged-in delivery staff member's portal. They appear in the super admin's orders page but not in the delivery portal.
+
+### Root cause (likely one of these — check all three)
+
+**A) API route permission issue:**
+The delivery queue endpoint (e.g. `GET /api/delivery/queue` or `GET /api/orders?status=ready`) has role middleware that excludes `delivery_staff` after Phase 5 changes.
+
+**Fix:** The delivery queue endpoint must explicitly allow `delivery_staff` role:
+```
+GET /api/delivery/queue → requireRole('delivery_staff', 'super_admin', 'branch_manager')
+```
+
+**B) Branch scoping returning empty:**
+The query filters ready orders by `branch_id` from the JWT. If the delivery staff member's `branch_id` is null or mismatched with the branch the orders belong to, zero results return. 
+
+**Fix:** When creating a delivery staff account in the admin panel, `branch_id` MUST be assigned — it cannot be null. Add a validation check: if a `delivery_staff` user has `branch_id = null`, the staff management page should show a warning and the queue endpoint should return a clear error ("Your account has no branch assigned — contact admin") rather than silently returning empty.
+
+**C) Socket.IO room mismatch:**
+When a chef marks an order "Ready," a Socket.IO event fires. The delivery portal should be listening for this event and update the UI in real time. After Phase 5 changes, the Socket.IO room names may have changed or the delivery portal may be joining a different room than the one the chef's action emits to.
+
+**Fix:** Standardize Socket.IO room naming across the entire codebase:
+- All users join a room named `branch:[branch_id]` on connection (e.g. `branch:1`)
+- Role-specific rooms: `branch:[branch_id]:kitchen`, `branch:[branch_id]:delivery`, `branch:[branch_id]:admin`
+- When a chef marks an order ready, emit to BOTH `branch:[branch_id]` (all users in that branch) AND specifically `branch:[branch_id]:delivery` (delivery staff only)
+- The delivery portal must join `branch:[branch_id]` and `branch:[branch_id]:delivery` on socket connect
+- Never emit to a room by user_id or any dynamic per-user room — use branch + role rooms only
+
+**Fix the Socket.IO connection in the delivery portal:**
+```javascript
+// On delivery portal socket connect:
+socket.join(`branch:${user.branchId}`);
+socket.join(`branch:${user.branchId}:delivery`);
+
+// On chef marking ready — server emits:
+io.to(`branch:${order.branchId}:delivery`).emit('order:ready', { order });
+io.to(`branch:${order.branchId}:admin`).emit('order:ready', { order });
+```
+
+**Step — Test end-to-end:**
+Open two browsers side by side — one logged in as a chef, one as a delivery staff member in the same branch. Have the chef mark an order ready. Confirm the delivery portal updates in real time without refresh. If it requires a refresh, the Socket.IO wiring is still wrong.
+
+---
+
+## 3. FIX — CHEF PORTAL: INCOMING ORDERS NOT APPEARING
+
+### What's broken
+When a delivery staff member submits a Relay Order from their portal, the order is created in the database but does not appear on the Chef Portal (Aberash's screen) in real time or even on refresh.
+
+### Root cause (check all three)
+
+**A) Kitchen queue API route excluding chef role:**
+The KDS queue endpoint (e.g. `GET /api/orders/kitchen` or `GET /api/kitchen/queue`) has role middleware that excludes `chef` after Phase 5.
+
+**Fix:**
+```
+GET /api/kitchen/queue → requireRole('chef', 'super_admin', 'branch_manager')
+```
+
+**B) Branch scoping issue — same as delivery (see Section 2B above):**
+Chef's `branch_id` must not be null. Same validation applies.
+
+**C) Socket.IO room mismatch for incoming orders:**
+When the delivery portal submits a new order (POST /api/orders), the server must emit a Socket.IO event to the kitchen room for that branch. Check that this emit is actually happening in the order creation route handler.
+
+**Fix:** In the POST /api/orders route handler, after successfully inserting the order:
+```javascript
+// After order is created:
+io.to(`branch:${order.branchId}:kitchen`).emit('order:new', { order });
+io.to(`branch:${order.branchId}:admin`).emit('order:new', { order });
+```
+
+The Chef Portal must be joined to `branch:[branch_id]:kitchen` on socket connect:
+```javascript
+// On chef portal socket connect:
+socket.join(`branch:${user.branchId}`);
+socket.join(`branch:${user.branchId}:kitchen`);
+```
+
+**D) Chef portal polling/fetching on load:**
+Even before real-time arrives, the Chef Portal must fetch the current kitchen queue from the API on page load. If the API call is failing silently (wrong endpoint, wrong auth header), Aberash sees nothing even after a refresh. Check the browser network tab for the kitchen queue API call — confirm it returns 200 with data, not 403 or empty array.
+
+**Test:** Submit an order from the delivery portal. Confirm it appears on the Chef Portal within 2 seconds without refresh. Also confirm it appears after a full page refresh (not just via socket).
+
+---
+
+## 4. REMOVE ALL WALK-IN ORDER LOGIC — DELIVERY ONLY RESTAURANT
+
+This restaurant does **not** have dine-in, walk-in, or table service. It is a delivery-only operation. Remove all walk-in references completely from the entire codebase.
+
+### What to find and remove/replace:
+
+**Database / Schema:**
+- The `orders.channel` enum currently likely includes a `"walk_in"` value — remove it. Allowed values going forward: `"whatsapp_voice"`, `"whatsapp_relay"`, `"webapp"`. Run a migration to remove `walk_in` from the enum. If any existing seed data has `channel = "walk_in"`, update those rows to `"whatsapp_relay"` before dropping the enum value.
+
+**Backend routes:**
+- Any route that accepts `channel: "walk_in"` in the request body — add a validation rejection: if `channel === "walk_in"`, return `400 Bad Request` with message "Walk-in orders are not supported. This is a delivery-only restaurant."
+- Any admin endpoint that creates manual orders — remove "Walk-in" as a selectable channel option.
+
+**Frontend — Admin Command Center:**
+- Orders page: remove any "Walk-in" filter tab, channel badge, or channel dropdown option.
+- New Order form (if one exists in admin): remove "Walk-in" channel option. Channels available for manual order creation: "WhatsApp Relay" and "Web Order" only.
+- Dashboard stats: if there's a "Walk-in Orders" stat card or chart segment — remove it.
+- Any "Table Number" field, "Covers" field, "Dine-in" toggle — remove entirely.
+
+**Frontend — Delivery Portal:**
+- No walk-in references should exist here, but do a search and remove any found.
+
+**Frontend — Chef Portal:**
+- Order tickets should show channel badges: "📱 WhatsApp" or "🌐 Web Order" — no "Walk-in" badge.
+
+**Frontend — Customer Webapp:**
+- No option to select "dine-in" or "eat in restaurant" — ordering flow is delivery only. If there's any "Order Type" selector (Delivery / Dine-in), remove it. Only delivery address input exists.
+
+**Global search:** Search the entire codebase for the strings `walk_in`, `walk-in`, `walkin`, `dine_in`, `dine-in`, `table_number`, `covers`, `dine in` (case-insensitive) and remove or replace every occurrence. Do this search explicitly and show me what you found before removing.
+
+---
+
+## 5. LOTTERY ENGINE — MANUAL MODE UPGRADE
+
+### Current behavior (what needs changing)
+Currently the lottery system either sends lucky numbers via Twilio automatically or doesn't generate them at a well-defined trigger point. The client wants a simpler, more controllable flow for now.
+
+### New required behavior
+
+**Lucky number generation trigger:**
+- Lucky numbers are generated at the moment an **Order Code is assigned** — i.e., when a new order is successfully created and gets its order code (`ORD-XXXX`). This happens for ALL delivery-channel orders (whatsapp_voice, whatsapp_relay, webapp).
+- NOT when the chef accepts (that was the Phase 4 spec) — move the trigger earlier to order creation. The customer should have their lucky number from the moment their order enters the system.
+
+**Lucky number storage:**
+- Generate a unique 6-digit lucky number (100000–999999, unique per branch per day — same uniqueness logic as Phase 4 spec).
+- Store it immediately in `lottery_entries` table: `order_id`, `branch_id`, `customer_phone`, `customer_name`, `lucky_number`, `draw_date` (today's date), `lucky_number_sent = false` (since we are NOT auto-sending via Twilio in this version).
+
+**Admin panel display — Lucky Numbers view:**
+- In the Admin Command Center → Lottery section, add a **"Today's Lucky Numbers"** live table showing all lottery entries for today:
+  - Columns: Order Code | Customer Name | Customer Phone | Lucky Number | Time Generated | Copied? (toggle)
+  - The **Lucky Number** column shows the full 6-digit number in a large, clear, copyable format — clicking it copies to clipboard with a toast "Copied #482917"
+  - A **"Copied"** toggle checkbox per row so the admin can mark which ones they've manually sent to the customer via WhatsApp (this is a local UI state flag for the admin's convenience, stored in `lottery_entries.manually_sent` boolean column)
+  - Real-time: new entries appear instantly (Socket.IO push) as new orders come in — no refresh needed
+  - The table is sorted newest-first
+
+**No automated Twilio send for lucky numbers:**
+- Remove any cron job or trigger that auto-sends lucky numbers via Twilio/WhatsApp
+- The admin sees the number in the panel and copies it manually to send via their own WhatsApp
+- Add a clearly visible instruction banner at the top of the Lucky Numbers view: "Copy each lucky number and send it to the customer via WhatsApp manually. Numbers are generated automatically when orders are created."
+
+**End-of-day Draw — keep as-is with one addition:**
+- The draw mechanism already exists — keep it
+- After the draw runs and winners are selected, display winners in a clear "Today's Winners" panel with: Winner Name, Phone Number, Lucky Number, Prize — in a format easy for the admin to screenshot or read from
+- Add a **"Copy Winner Message"** button per winner that copies a pre-formatted WhatsApp message to clipboard:
+  ```
+  🎉 እንኳን ደስ አለዎ! / Congratulations!
+  TG's Restaurant (ቲጂ ምግብ ቤት)
+  Your lucky number #[XXXXXX] has WON!
+  Prize: [prize description]
+  Please contact us to claim your prize.
+  ```
+- The admin then pastes this into their WhatsApp and sends it manually — no Twilio required for winner notification either (unless Twilio is configured in Settings, in which case offer a "Send via WhatsApp" button as an option but not the default)
+
+---
+
+## 6. ADDITIONAL FIXES WHILE YOU'RE IN THE CODE
+
+These are small but important — fix them alongside the above:
+
+**A) Branch assignment validation on staff creation:**
+When creating any staff member (chef, delivery, order intake, addis) in the Staff Management page — `branch_id` is REQUIRED. Do not allow creating a staff account with no branch assigned. The form must show a branch selector and block submission if no branch is selected. This prevents the empty queue bug from recurring.
+
+**B) Delivery portal — "Send to Kitchen" button:**
+After the menu fix (Section 1), confirm the full relay order flow works: delivery staff selects items → hits "Send to Kitchen" → order is created → appears on Chef Portal in real time. If this full loop is broken, trace and fix it end-to-end.
+
+**C) Chef portal — order channel badge:**
+Each incoming order ticket on the KDS should show a small badge indicating its source:
+- "📱 WhatsApp Relay" — for orders relayed by delivery staff from WhatsApp
+- "🌐 Web Order" — for direct webapp orders
+- "🎙️ Voice Queue" — for whatsapp_voice channel orders
+No "Walk-in" badge (removed in Section 4).
+
+**D) Real-time order count on chef portal header:**
+Show a live count of active orders in the chef's queue (pending_acceptance + preparing) in the Chef Portal header or tab title — e.g. "Chef Portal — 3 Active Orders". Updates via Socket.IO. Helps the chef know their workload at a glance.
+
+---
+
+## 7. VERIFICATION CHECKLIST
+
+Run through every item personally before reporting complete:
+
+**Cross-portal data flow:**
+- [ ] Delivery staff logs in → Relay Order tab shows full menu with categories and items loading correctly from API.
+- [ ] Delivery staff submits a relay order → it appears on Chef Portal (Aberash's screen) within 2 seconds, no refresh.
+- [ ] Chef marks order "Ready" → it appears in the logged-in delivery staff member's "Ready to Claim" queue within 2 seconds, no refresh.
+- [ ] Open browser network tab on delivery portal — confirm `GET /api/delivery/queue` returns 200 with data (not 403 or empty array).
+- [ ] Open browser network tab on chef portal — confirm kitchen queue API call returns 200 with data.
+
+**Walk-in removal:**
+- [ ] Search results for `walk_in`, `dine_in`, `table_number` across entire codebase — zero matches remaining.
+- [ ] Orders page in admin has no "Walk-in" filter or channel option.
+- [ ] Attempting to POST an order with `channel: "walk_in"` returns 400 Bad Request.
+
+**Lottery manual mode:**
+- [ ] Creating a new order (any channel) automatically generates a lucky number and it appears in the admin Lottery → Today's Lucky Numbers table within 2 seconds.
+- [ ] Clicking a lucky number copies it to clipboard with a toast notification.
+- [ ] "Copied" toggle marks that entry as manually sent.
+- [ ] No Twilio API call is made for lucky number sending (check server logs — no Twilio request fired on order creation).
+- [ ] Draw runs correctly, winners displayed with "Copy Winner Message" button that copies the bilingual WhatsApp message.
+
+**Staff creation:**
+- [ ] Creating a chef or delivery staff with no branch assigned is blocked by the form with a clear validation message.
+- [ ] Newly created staff can log in with their credentials and their portal loads with correct branch-scoped data immediately.
+
+**General:**
+- [ ] No walk-in, dine-in, or table service references visible anywhere in any portal.
+- [ ] Chef portal header shows live active order count.
+- [ ] Channel badges on KDS tickets are correct (WhatsApp Relay / Web Order / Voice Queue).
+
+---
+
+## 8. FINAL INSTRUCTION TO REPLIT AGENT
+
+Fix in this exact order:
+
+1. First: audit and fix all API route middleware permissions for menu read, kitchen queue, and delivery queue — these are the root cause of the empty portals. Test each API endpoint directly before touching the frontend.
+
+2. Second: fix Socket.IO room naming — standardize to `branch:[id]` and `branch:[id]:role` pattern across the entire codebase. Test real-time cross-portal flow with two browser windows open simultaneously.
+
+3. Third: remove all walk-in/dine-in logic — search, list what you found, then remove.
+
+4. Fourth: update lottery engine — move trigger to order creation, build the Today's Lucky Numbers admin table, add Copy Winner Message button.
+
+5. Fifth: the additional small fixes in Section 6.
+
+Do NOT start on step 2 until step 1 is confirmed working. Do NOT start on step 3 until step 2 is confirmed working (two browser test passing). Follow the order strictly — these fixes depend on each other.

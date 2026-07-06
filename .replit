@@ -1,0 +1,56 @@
+modules = ["nodejs-24", "postgresql-16"]
+
+[deployment]
+router = "application"
+deploymentTarget = "autoscale"
+
+[deployment.postBuild]
+args = ["pnpm", "store", "prune"]
+env = { "CI" = "true" }
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "TG Restaurant ERP"
+
+[[workflows.workflow]]
+name = "TG Restaurant ERP"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pnpm --filter @workspace/api-server run dev & pnpm --filter @workspace/tg-erp run dev"
+waitForPort = 8080
+
+[workflows.workflow.metadata]
+outputType = "webview"
+
+[agent]
+stack = "BEST_EFFORT_FALLBACK"
+expertMode = true
+
+[postMerge]
+path = "scripts/post-merge.sh"
+timeoutMs = 20000
+
+[nix]
+channel = "stable-25_05"
+
+[userenv]
+
+[userenv.shared]
+LOG_LEVEL = "info"
+NODE_ENV = "development"
+TWILIO_ACCOUNT_SID = "placeholder"
+TWILIO_AUTH_TOKEN = "placeholder"
+TWILIO_WHATSAPP_FROM = "placeholder"
+JWT_SECRET = "1d44a5896a195effb7a64e01441778a2be30b67b67ca25ff596e14c965bf5285fa6d0c610693aae39f8d58599c6b7936d04846677f4dcf64434cd2e723c3bc06"
+JWT_REFRESH_SECRET = "73ff275e3e8d60b6757abb4edf88a512706635d6c2230e546d1efd520a21a13142e12b34283ba515e3769aab9317f221c6ad9bc45039aeb632c96250b6ac2bd5"
+SETTINGS_ENCRYPTION_KEY = "2f9940af832000c7b25a0302ad84c69a"

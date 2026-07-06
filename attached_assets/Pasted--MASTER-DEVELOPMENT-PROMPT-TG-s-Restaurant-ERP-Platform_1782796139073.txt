@@ -1,0 +1,235 @@
+# MASTER DEVELOPMENT PROMPT — TG's Restaurant ERP Platform
+### (ቲጂ ምግብ ቤት — Ethiopian Restaurant, Dubai/UAE)
+
+Copy everything below into Replit AI / Replit Agent as the project brief.
+
+---
+
+## 1. PROJECT IDENTITY & VISION
+
+Build a **private, full-stack, multi-branch Enterprise Resource Planning (ERP) web platform** for **TG's Restaurant (ቲጂ ምግብ ቤት)**, an Ethiopian restaurant operating in Dubai, UAE with **multiple branches**. This system replaces a fully manual WhatsApp-based ordering and paper/Excel-based operations workflow with a centralized, real-time, secure, role-based digital platform.
+
+This is a **commercial-grade, production-quality product** — not a prototype. Every module must be built with real validation, real error handling, real security, and a polished, modern, "cinematic" UI. The branding, logo, and visual identity of TG's Restaurant must be present throughout (header, login screen, favicon, receipts, customer-facing menu page).
+
+**Design tone:** Premium, dark-modern, high-contrast dashboard aesthetic (think: a hybrid of a POS system + a live ops command center). Smooth transitions, subtle motion/animation on live events (e.g., a new order pulsing in), clear typography, and an Ethiopian-inspired accent color palette (warm ambers/terracotta/deep green/gold) layered over a sleek dark UI base — avoid generic "default Bootstrap" look at all costs.
+
+---
+
+## 2. TECH STACK (MANDATORY)
+
+- **Frontend:** React.js + TailwindCSS, built as a **Progressive Web App (PWA)** with offline-capable POS/Kitchen Display screens (service worker + local caching/queueing of actions taken offline, synced when back online).
+- **Backend:** Node.js with Express.js — REST API + WebSocket server.
+- **Real-Time Layer:** WebSockets (Socket.IO recommended) for instant order push, kitchen status changes, delivery status changes, and live admin dashboard updates — zero polling, zero manual refresh.
+- **Database:** PostgreSQL — fully relational schema (see Section 6) with foreign keys, constraints, and indexes for performance at scale across multiple branches.
+- **Authentication:** JWT-based session tokens + refresh tokens, httpOnly secure cookies, bcrypt/argon2 password hashing, role-based access control (RBAC) middleware on every route.
+- **Communications:**
+  - **Twilio API** — outbound/inbound SMS, and WhatsApp Business API integration (this is the critical bridge — see Section 4.1).
+  - **SendGrid API** — transactional + marketing email.
+- **File/Media Storage:** Cloud object storage (e.g., S3-compatible bucket) for menu item photos, logo, receipts, ID/payroll documents.
+- **Hosting:** Deployed to a private cloud environment, environment-variable-driven config (no hardcoded secrets), separate `.env` for dev/staging/production.
+- **Additional recommended layers:**
+  - Redis for caching live order queues, session storage, and rate limiting.
+  - Cron job scheduler (node-cron) for recurring tasks: daily/monthly profit rollups, payroll cycle closing, scheduled marketing blasts, lottery draws.
+  - PDF generation library (e.g., pdf-lib or puppeteer) for payslips, daily reports, and invoices.
+  - Zod or Joi for backend request validation on every endpoint.
+  - Helmet.js, CORS whitelist, rate-limiting (express-rate-limit), and input sanitization on all routes.
+
+---
+
+## 3. USER ROLES & ACCESS CONTROL (RBAC)
+
+Strict hierarchical permission system. A user only sees the modules assigned to their role — nothing more.
+
+| Role | Access |
+|---|---|
+| **Super Admin** | Full unrestricted access to ALL branches, ALL modules, ALL financial data, staff management, system configuration, audit logs. Only this role can create/delete other admins or change system-wide settings. |
+| **Branch Manager** | Full operational + financial visibility for their assigned branch only (income/expense, payroll, staff performance, order history). Cannot access other branches or system configuration. |
+| **Kitchen Staff (Chef)** | Access only to Kitchen Display System (KDS): incoming orders, mark items "in progress"/"ready". No financial or customer data visibility. |
+| **Delivery Staff** | Access only to their assigned delivery queue: order details, customer location/phone, "picked up" → "delivered"/"failed" status confirmation, their own commission/earnings view. |
+| **Customer Service / Order Staff** | Access to incoming WhatsApp-linked order queue, manual order entry/correction, customer order status lookup. |
+| **Customer (public)** | No login required (or lightweight phone-based login) — access only to the public-facing ordering mini-webapp (menu browsing + ordering + order status tracking). |
+
+**Security requirements:**
+- Every login attempt logged (timestamp, IP, device, success/fail).
+- Account lockout after repeated failed attempts.
+- Forced password reset capability by Super Admin.
+- Full **audit trail**: every create/update/delete action across the system logged with `user_id`, `action`, `timestamp`, `before/after value` — visible only to Super Admin in an "Audit Log" panel.
+- 2FA (SMS-based via Twilio) optional toggle for admin-level accounts.
+- Session timeout + "remember this device" option.
+
+---
+
+## 4. CORE MODULES — FULL FUNCTIONAL SPEC
+
+### 4.1 WhatsApp → ERP Live Order Bridge (the centerpiece module)
+Replace the fully manual WhatsApp catalogue process with an automated bridge:
+- Integrate **WhatsApp Business Cloud API** (via Meta directly or through Twilio's WhatsApp API) connected to the existing TG Restaurant WhatsApp Business number/catalogue.
+- Incoming customer messages/orders are parsed (or, where free-text parsing isn't reliable, routed into a **staff confirmation queue** where order staff convert the WhatsApp message into a structured digital order with one click/tap) and instantly created as a structured `Order` record in the database.
+- Auto-generates a unique **Order Code** per order (no more manual name/number labeling) — visible to kitchen, delivery, and customer.
+- Order instantly appears in real time (via WebSocket) on:
+  - Kitchen Display System
+  - Manager/Admin live dashboard
+  - Delivery queue (once marked "ready")
+- Automated WhatsApp reply to the customer confirming the order code and estimated time, sent via API (no manual typing by staff).
+- Order status updates (preparing → ready → out for delivery → delivered) can optionally trigger automated WhatsApp status messages back to the customer.
+
+### 4.2 Kitchen Display System (KDS)
+- Real-time ticket-style display of all incoming orders per branch, sorted by time received.
+- Each ticket shows: Order Code, items, quantities, special notes, time elapsed (color-coded — green/yellow/red the longer it sits).
+- Chef taps **"Start Preparing" → "Mark Ready"** — this single action instantly notifies (via WebSocket push + sound/visual alert) the manager dashboard AND the delivery staff app simultaneously. No more "no one knows it's ready."
+- Touch-optimized, large-text layout suitable for a kitchen tablet/monitor.
+
+### 4.3 Delivery Management Module
+- Delivery staff see a live queue of "Ready for Pickup" orders assigned to them (auto-assigned by branch/zone, or manually assigned by manager).
+- One-tap **"Picked Up"** and **"Delivered" / "Delivery Failed"** status buttons — fully replacing the old "no one knows if it was delivered" problem.
+- Capture delivery timestamp, AED amount collected (if cash on delivery), and optional delivery photo/signature confirmation.
+- GPS/location field captured from the order for delivery routing reference.
+- Live delivery status visible on the Admin Follow-Up dashboard (Section 4.9) in real time.
+- Per-delivery commission auto-logged to that staff member's earnings record (see Section 4.5).
+
+### 4.4 Digital Lottery / "Lot" Engine
+Digitizes the manual paper-based lucky-draw process:
+- After daily orders close, system auto-generates digital lot/ticket numbers for eligible customers (e.g., every customer who ordered that day, or based on configurable eligibility rules set by admin).
+- Admin-configurable **draw scheduler**: number of winners, prize tiers, draw date/time.
+- One-click **"Run Draw"** — a provably-fair random number selection from the eligible pool, with the result logged (timestamp, seed, winning numbers) for transparency/auditability.
+- Auto-sends winner notifications via WhatsApp/SMS through the Twilio integration — no manual messaging.
+- Public/customer-facing results page showing winning numbers (replacing the old separate results website) with optional animated "reveal" presentation.
+- Full history log of past draws, winners, and prizes claimed/unclaimed.
+
+### 4.5 Finance Engine — Income, Expense & Profit Automation
+- **Every order** automatically logs: items sold, sale amount (AED), delivery cost/time, branch, staff involved, payment method.
+- **Daily & Monthly Profit Engine**: auto-calculated rollups of total income, total expenses (ingredient/inventory costs, payroll, delivery costs, marketing spend), and net profit — broken down per branch and combined across all branches (Super Admin view only).
+- **Expense entry module** for manager-logged operational expenses (inventory purchases, utilities, maintenance) — categorized and tagged to a branch.
+- Visual financial dashboard: line/bar charts for daily revenue trends, top-selling items, peak order hours, branch comparison.
+- Exportable financial reports (PDF/Excel) by date range.
+- This data is **strictly restricted to Manager (own branch) and Super Admin (all branches)** — no other role can view financial figures.
+
+### 4.6 Payroll & Commission Module
+- Each staff profile holds: base monthly salary, role, branch, hire date, bank/payment details.
+- **Work Time Calculator**: clock-in/clock-out tracking (manual entry or integrated time tracking) auto-calculating hours worked, overtime, and absences per pay period.
+- **Salary Calculator**: auto-computes monthly gross pay = base salary + accumulated per-order commission/bonus (configurable AED amount or % per completed order, set per role by Super Admin) + overtime - deductions.
+- Commission auto-accrues in real time as each staff member's linked orders are completed/delivered.
+- Auto-generated monthly **payslip (PDF)** per employee, downloadable/printable, with full breakdown.
+- Payroll history archive — searchable by employee, month, branch.
+
+### 4.7 Inventory & Recipe / Waste Management
+- Ingredient/stock database per branch with current quantity, unit, reorder threshold, and supplier info.
+- Each menu item linked to a **recipe** (ingredient list + quantities consumed per order) — so every completed order automatically decrements stock levels.
+- Low-stock alerts pushed to manager dashboard in real time.
+- **Waste logging**: manager/kitchen can log spoiled/wasted ingredients with reason and quantity — feeding into the expense/profit calculations for accuracy.
+
+### 4.8 Customer-Facing Mini Webapp (Online Menu & Ordering)
+A separate, lightweight, fully responsive public page (in addition to the WhatsApp channel) where customers can:
+- Browse the live menu by category (admin-managed — add/edit/remove items, prices, photos, availability toggle, "out of stock" flag) in both English and Amharic.
+- Add items to a cart and place an order directly (capturing name, phone, delivery address/location).
+- Track their order status live (Order Received → Preparing → Ready → Out for Delivery → Delivered) via the same Order Code system.
+- Fully synced with the same backend/database as the WhatsApp and KDS flow — one unified order pipeline regardless of channel (WhatsApp or webapp).
+- TG's Restaurant branding/logo prominent throughout.
+
+### 4.9 Unified Messaging Hub
+- Internal staff group chat/channels per branch (kitchen team, delivery team, management) — built-in real-time chat using the same WebSocket layer.
+- Automated customer service alert templates (order delays, confirmation, promotions) triggerable from the admin panel.
+- Centralizes what used to be scattered across personal WhatsApp chats into one auditable internal system.
+
+### 4.10 Bulk Marketing Engine
+- Admin can segment customers into tiers (e.g., frequent customers, inactive 30+ days, VIP/high-spend) based on order history data already in the system.
+- Compose and **schedule** bulk WhatsApp messages (via the Twilio/WhatsApp API), SMS (Twilio), and email (SendGrid) campaigns targeting specific tiers — e.g., "send a slow-Tuesday promo to all customers inactive in the last 2 weeks."
+- Campaign performance tracking (sent/delivered/opened where available).
+
+### 4.11 Super Admin "Command Center" Follow-Up Dashboard
+The flagship screen — a single, beautifully organized, real-time operations view giving the Super Admin (and branch Managers, scoped to their branch) total situational awareness:
+- Live order map/feed across all branches simultaneously.
+- Live staff status: who's online, what kitchen staff are working on, where each delivery person is in their run.
+- Today's KPIs at a glance: total orders, revenue, average prep time, average delivery time, lottery draw status.
+- Drill-down into any branch, any staff member, any order, any financial figure — all from one screen.
+- Alerts panel: low stock, delayed orders, failed deliveries, flagged issues.
+- This is the module that should receive the most visual/UX polish — it's the "mission control" of the entire platform.
+
+---
+
+## 5. MULTI-BRANCH ARCHITECTURE
+
+- All branches operate on **one centralized database/server** — never separate siloed systems.
+- Every relevant table (orders, staff, inventory, finance) is tagged with a `branch_id` foreign key.
+- Branch Managers and staff are scoped to their `branch_id` at the authentication/middleware level — enforced server-side, never just hidden in the UI.
+- Super Admin can filter any view by "All Branches" or drill into a specific one.
+- System should be built so that **adding a new branch in the future** is a simple admin-panel action (no code changes required) — new branch record, assign staff, done.
+
+---
+
+## 6. DATABASE SCHEMA — CORE TABLES (PostgreSQL)
+
+Build out full relational tables including (not exhaustive — expand as needed during development):
+
+- `branches` (id, name, address, phone, active)
+- `users` (id, name, phone, email, password_hash, role, branch_id, active, created_at)
+- `audit_logs` (id, user_id, action, target_table, target_id, before_value, after_value, ip_address, created_at)
+- `menu_categories` (id, branch_id, name_en, name_am, sort_order)
+- `menu_items` (id, category_id, name_en, name_am, description, price_aed, photo_url, available, recipe_id)
+- `recipes` (id, menu_item_id) + `recipe_ingredients` (recipe_id, ingredient_id, quantity_required)
+- `inventory_items` (id, branch_id, name, unit, quantity_on_hand, reorder_threshold, supplier)
+- `waste_logs` (id, branch_id, ingredient_id, quantity, reason, logged_by, created_at)
+- `customers` (id, name, phone, whatsapp_id, address, created_at)
+- `orders` (id, order_code, branch_id, customer_id, channel [whatsapp/webapp], status, total_aed, payment_method, created_at)
+- `order_items` (id, order_id, menu_item_id, quantity, unit_price, notes)
+- `order_status_history` (id, order_id, status, changed_by, changed_at)
+- `deliveries` (id, order_id, delivery_staff_id, picked_up_at, delivered_at, delivery_status, amount_collected, gps_location)
+- `commissions` (id, user_id, order_id, amount_aed, type, created_at)
+- `payroll_periods` (id, branch_id, period_start, period_end, status)
+- `payslips` (id, user_id, period_id, base_salary, commission_total, overtime_total, deductions, net_pay, generated_at)
+- `timesheets` (id, user_id, clock_in, clock_out, branch_id)
+- `expenses` (id, branch_id, category, amount_aed, description, logged_by, created_at)
+- `lottery_draws` (id, branch_id, draw_date, eligible_pool, status)
+- `lottery_entries` (id, draw_id, customer_id, ticket_number)
+- `lottery_winners` (id, draw_id, entry_id, prize, notified)
+- `marketing_campaigns` (id, channel, segment, message, scheduled_at, status)
+- `messages` (internal staff chat: id, sender_id, channel_id/branch_id, content, created_at)
+
+Use proper indexing on `branch_id`, `order_code`, `phone`, and timestamp columns for query performance at scale.
+
+---
+
+## 7. UI/UX DIRECTION
+
+- Dark-mode-first dashboard with TG's Restaurant logo and an Ethiopian-inspired warm accent palette (terracotta/amber/gold against deep charcoal/forest green base).
+- Smooth real-time animations: new orders should visually "arrive" with subtle motion + sound cue on KDS and dashboard.
+- Clear status badges/color-coding throughout (e.g., yellow = preparing, blue = ready, purple = out for delivery, green = delivered, red = delayed/failed).
+- Fully responsive — Manager dashboard and customer webapp must work cleanly on mobile, tablet, and desktop; KDS and Delivery views optimized for tablet/phone touch use.
+- Bilingual support (English / Amharic) across the customer-facing menu and key staff-facing labels where practical.
+- Professional login screen featuring the TG's Restaurant logo, with secure, clean authentication flow (and clear "forgot password" recovery path via SMS/email).
+
+---
+
+## 8. SECURITY CHECKLIST (NON-NEGOTIABLE)
+
+- All passwords hashed (bcrypt/argon2) — never stored in plaintext.
+- JWT tokens short-lived + refresh token rotation.
+- Role-based middleware enforced on every single API route, not just hidden in frontend.
+- Rate limiting on login and public-facing order endpoints to prevent abuse.
+- Input validation/sanitization on all forms and API inputs (prevent SQL injection/XSS).
+- HTTPS enforced everywhere; secure, httpOnly, sameSite cookies.
+- Full audit logging of sensitive actions (financial edits, role changes, deletions).
+- Environment secrets (API keys for Twilio/SendGrid/DB credentials) never committed to code — `.env` only.
+- Regular automated backups of the PostgreSQL database.
+
+---
+
+## 9. BUILD PRIORITY / PHASING (recommended order for Replit Agent to execute)
+
+1. **Foundation:** Auth system, RBAC, database schema, branch structure, base UI shell/navigation per role.
+2. **Core Order Pipeline:** Orders table, Order Code generation, Kitchen Display System, Delivery module, real-time WebSocket wiring between them.
+3. **WhatsApp Bridge:** Twilio/WhatsApp API integration → order intake → automated confirmations.
+4. **Customer Webapp:** Public menu + ordering page, synced to same order pipeline.
+5. **Finance Engine:** Income/expense auto-calculation, daily/monthly profit dashboards.
+6. **Payroll & Commission:** Work time calculator, salary calculator, payslip generation.
+7. **Inventory & Recipes:** Stock decrement on order, waste logging, low-stock alerts.
+8. **Lottery Engine:** Digital lot generation, draw mechanism, winner notification.
+9. **Messaging Hub & Marketing Engine:** Internal chat, bulk campaign tool.
+10. **Super Admin Command Center:** Final polished, unified live dashboard tying every module together.
+11. **PWA/offline support, security hardening, audit logging, final UI polish pass.**
+
+---
+
+## 10. FINAL INSTRUCTION TO REPLIT AGENT
+
+Build this as a real, deployable, production-grade application — not a demo. Prioritize data integrity (proper relational constraints, no orphaned records), real-time reliability (WebSocket reconnection handling), and role security (server-side enforcement everywhere) above all else. Every module listed above must be fully functional and connected to the same central PostgreSQL database — this is one unified system, not disconnected mini-apps. Use TG's Restaurant branding and a premium, modern, dark-themed visual identity throughout. Ask clarifying questions only where genuinely ambiguous; otherwise proceed using the specifications above as the source of truth.

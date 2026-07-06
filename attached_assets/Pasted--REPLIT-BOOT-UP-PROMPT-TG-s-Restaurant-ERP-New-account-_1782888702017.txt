@@ -1,0 +1,133 @@
+# REPLIT BOOT-UP PROMPT — TG's Restaurant ERP
+### New account import — extract, configure & run everything
+
+---
+
+## YOUR FIRST JOB — READ THIS FULLY BEFORE TOUCHING ANYTHING
+
+A full existing project has been imported as a ZIP file. Your only job right now is to **extract it, understand its structure, install all dependencies, configure the environment, and get every part of it running correctly.** Do not modify any feature code, do not refactor anything, do not "improve" anything — just make it run exactly as it was built.
+
+---
+
+## STEP 1 — EXTRACT THE ZIP
+
+Find the uploaded ZIP file in the Replit file tree. Extract its full contents into the project root. After extraction you should see a monorepo/multi-package structure with folders roughly like:
+
+```
+/artifacts/
+  /tg-erp/          ← Main React frontend (Vite)
+  /api-server/      ← Express backend
+/lib/
+  /db/              ← Database schema (Drizzle ORM or similar)
+  /api-zod/         ← Shared Zod validation types
+  /api-client-react/ ← Shared API client
+```
+
+If the structure differs slightly from above, map what's there — do not assume, look at what actually extracted.
+
+---
+
+## STEP 2 — READ THE EXISTING CONFIG FILES
+
+Before running anything, read these files if they exist:
+- Root `package.json` — check if there's a monorepo workspace setup (npm/yarn/pnpm workspaces)
+- Each sub-package's `package.json` — note the `start`, `dev`, `build` scripts
+- Any existing `.env.example` or `.env` file — note what environment variables are required
+- `drizzle.config.ts` or any migration config — note how the DB schema is managed
+- `README.md` at root or in any sub-package — follow any setup instructions already written
+
+Do not skip this step. Running install without reading the config first is how you break a monorepo.
+
+---
+
+## STEP 3 — SET UP THE DATABASE
+
+1. Create a new **PostgreSQL** database for this Replit (use Replit's built-in PostgreSQL or a Neon/Supabase free tier — whichever is faster to get running).
+2. Set the `DATABASE_URL` environment variable in Replit's **Secrets** panel (not in a committed `.env` file).
+3. Run the existing database migrations or schema push — look for a command like `npm run db:push`, `npm run db:migrate`, or `npx drizzle-kit push` in the db package. Run whatever already exists — do not rewrite the schema.
+4. Run the seed script if one exists (`npm run db:seed` or similar) to populate demo data.
+5. Confirm the tables exist by running a quick check query.
+
+---
+
+## STEP 4 — SET UP ALL ENVIRONMENT VARIABLES
+
+In Replit's **Secrets** panel, add all required environment variables. At minimum these will include:
+
+| Key | Value |
+|---|---|
+| `DATABASE_URL` | Your PostgreSQL connection string |
+| `JWT_SECRET` | Any long random string (e.g. 64+ random characters) |
+| `JWT_REFRESH_SECRET` | A different long random string |
+| `PORT` | 3000 (or whatever the API server uses) |
+| `NODE_ENV` | `development` |
+| `TWILIO_ACCOUNT_SID` | Leave as `placeholder` for now |
+| `TWILIO_AUTH_TOKEN` | Leave as `placeholder` for now |
+| `TWILIO_WHATSAPP_NUMBER` | Leave as `placeholder` for now |
+| `SENDGRID_API_KEY` | Leave as `placeholder` for now |
+
+Check the existing codebase for any other `process.env.XXX` references and add those too. Any missing env variable that's referenced in code but not set will crash the server on startup — find them all before starting.
+
+---
+
+## STEP 5 — INSTALL ALL DEPENDENCIES
+
+If this is a monorepo with workspaces, run install from the **root** — not inside individual sub-folders:
+
+```bash
+npm install
+# or if it uses pnpm:
+pnpm install
+# or yarn:
+yarn install
+```
+
+If packages fail to install, read the error carefully — it's almost always a Node version mismatch or a missing peer dependency. Fix the root cause, don't just force-install.
+
+---
+
+## STEP 6 — START EVERYTHING
+
+Start the backend API server and the frontend dev server. These may need to run in parallel — use Replit's multiple shell tabs or a tool like `concurrently` if the root `package.json` has a combined start script.
+
+Typical commands (use what the actual package.json scripts say, not these verbatim):
+```bash
+# Terminal 1 — API server
+cd artifacts/api-server && npm run dev
+
+# Terminal 2 — Frontend
+cd artifacts/tg-erp && npm run dev
+```
+
+Or if there's a root-level combined script:
+```bash
+npm run dev
+```
+
+---
+
+## STEP 7 — VERIFY EVERYTHING IS WORKING
+
+Before telling me it's running, confirm each of these yourself:
+
+- [ ] API server starts with no crash errors in the terminal (a "listening on port XXXX" message confirms it).
+- [ ] Frontend dev server starts and is accessible via the Replit preview URL with no blank screen or build errors.
+- [ ] The login screen loads correctly with the TG's Restaurant branding.
+- [ ] You can log in with the Super Admin credentials: **phone: +251911001001 / password: admin123**
+- [ ] After login, the main dashboard loads and shows data (even if it's seeded demo data).
+- [ ] You can log in with a staff account: **phone: +251911001002 / password: staff123**
+- [ ] No console errors about missing environment variables, failed DB connections, or broken API routes on the main pages.
+
+If anything fails at this step, fix it before reporting back — a half-running app is not "running."
+
+---
+
+## WHAT TO REPORT BACK
+
+Once everything is confirmed working, tell me:
+1. The live preview URL(s) for the frontend and API.
+2. The exact folder structure you found after extraction.
+3. Any packages, scripts, or config that were missing or needed fixing, and what you did to resolve them.
+4. Confirmation that all 7 checklist items above are passing.
+
+**Do not start building new features, refactoring code, or "improving" anything yet.** The next phase of upgrades (a full structural rebuild with real-time WebSockets, separate role portals, and major new features) will be given as a separate prompt once the existing system is confirmed live. Your only job right now is: extract → configure → run → verify → report.

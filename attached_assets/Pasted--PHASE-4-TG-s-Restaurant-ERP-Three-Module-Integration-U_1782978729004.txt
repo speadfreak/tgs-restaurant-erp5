@@ -1,0 +1,559 @@
+# PHASE 4 — TG's Restaurant ERP: Three-Module Integration Upgrade
+### (ቲጂ ምግብ ቤት — Replit Agent Brief)
+### Modules: WhatsApp Voice Queue System · Addis Ababa Import Supply Chain · Automated Lottery Engine
+
+Read every section fully before writing a single line of code. These three modules are additive — they build on top of the Phase 3 architecture without breaking any existing portal, order pipeline, or real-time layer. Do not refactor anything that is currently working. Add to it.
+
+---
+
+## 0. INTEGRATION PHILOSOPHY
+
+Phase 3 gave the system four working portals (Admin, Chef, Deliveryman, Customer Webapp), a real-time Socket.IO order pipeline (Path A: WhatsApp relay, Path B: webapp direct), and the Odoo-inspired power features (Activity Timeline, Kanban Dispatch, Reorder Rules, Consolidated Reporting, Scheduled Tasks). Phase 4 adds three self-contained modules that each hook into that existing foundation at precisely defined connection points. The connection points are:
+
+- **Voice Queue System** hooks into: the existing Twilio/WhatsApp webhook endpoint, the existing `orders` table (adds a pre-confirmation shell state), the existing Chef Portal flow (confirmed queue orders become normal orders), and a new Order Intake Staff view inside the Admin portal.
+- **Automated Lottery Engine** hooks into: the existing order status state machine (triggers on `preparing` transition), the existing `customers` table (phone number), the existing Twilio/WhatsApp API integration, and the existing Admin lottery draw interface.
+- **Addis Ababa Supply Chain** hooks into: the existing Finance module (imports appear as a new expense category in P&L), the existing branch/admin RBAC system (new `addis_staff` role), and the existing multi-branch consolidated reporting.
+
+None of these modules require changes to the Chef Portal, Deliveryman Portal, or Customer Webapp built in Phase 3. They extend the Admin Command Center, the Finance module, and the Twilio integration layer.
+
+---
+
+## MODULE 1 — WHATSAPP VOICE QUEUE SYSTEM
+
+### 1.0 What This Replaces and Why
+
+Currently (Phase 3 Path A), a delivery staff member who sees a customer's WhatsApp message must manually open the Deliveryman Portal, fill in the Relay Order form themselves, and submit it. This works but has a gap: the customer gets no acknowledgment until a human processes it, and the customer's WhatsApp message exists only on WhatsApp — it never touches the ERP until a human bridges it.
+
+The new Voice Queue System closes this gap: **the moment any WhatsApp message arrives, the ERP automatically responds, creates an order shell, and assigns a queue number — before any human touches anything.** A dedicated Order Intake Staff member then works the queue in the ERP, filling in the actual food items after verbally confirming with the customer. Once confirmed, the order enters the existing Phase 3 pipeline (Chef Portal → KDS → Delivery) exactly as before.
+
+### 1.1 Full Flow — Step by Step
+
+**Step 1 — Customer sends any WhatsApp message (voice or text):**
+- Customer sends a voice note in Amharic, or a text message like "2 doro wat please," to the restaurant's WhatsApp Business number.
+- The existing Twilio/WhatsApp webhook endpoint (`/api/webhooks/whatsapp`) receives the inbound message payload, which contains: customer phone number, customer name (if in their WA profile), message type (voice/text), message content or media URL, and message ID.
+
+**Step 2 — ERP auto-creates an order shell (instantaneous, no human needed):**
+- The webhook handler immediately creates a new `orders` row with:
+  - `status = "queue"` (new status, sits before `pending_acceptance` in the state machine)
+  - `channel = "whatsapp_voice"` (new channel value)
+  - `customer_phone` = extracted from the webhook payload
+  - `customer_name` = from WA profile if available, otherwise `null` (staff fills it in later)
+  - `queue_number` = auto-assigned (see Section 1.2)
+  - `whatsapp_message_id` = stored for threading replies back to the correct conversation
+  - `whatsapp_message_type` = `"voice"` or `"text"`
+  - `whatsapp_media_url` = if voice note, store the Twilio media URL so staff can play it from the ERP
+  - `items` = empty (not yet confirmed)
+  - `relayed_by_user_id` = null (set later when an Order Intake Staff member claims the queue entry)
+- This row creation must be atomic and instant — if the webhook handler fails for any reason, return a 200 to Twilio anyway (never let the webhook fail silently) and log the error separately.
+
+**Step 3 — ERP auto-replies to customer on WhatsApp (instantaneous):**
+- Immediately after creating the order shell, the system sends a real outbound WhatsApp message back to the customer's number via the Twilio WhatsApp API:
+  > *"ሰላም! 👋 ትዕዛዝዎን ተቀብለናል። የሰልፍ ቁጥርዎ #[queue_number] ነው። ሠራተኛችን በቅርቡ ያረጋግጥልዎታል። / Hello! We received your message. Your queue number is #[queue_number]. Our staff will confirm your order shortly."*
+- This message must be sent in both Amharic and English (bilingual, as shown above) since TG's customers are Ethiopian.
+- Store the outbound message ID returned by Twilio in a `whatsapp_messages` table for the conversation history/Unified Messaging Hub.
+- If the Twilio send fails, log the error and flag the queue entry with `auto_reply_sent = false` so staff know to manually message the customer.
+
+**Step 4 — Order Intake Staff works the queue:**
+- A new **"Order Queue"** view is added to the Admin Command Center sidebar (visible to Super Admin, Branch Manager, and a new `order_intake` role).
+- This view shows all orders with `status = "queue"` for the branch, sorted oldest-first, each displayed as a numbered card:
+  - Large `#[queue_number]` badge (prominent, easy to scan)
+  - Customer phone number (tap to call or open WhatsApp)
+  - Customer name (if known) or "Unknown — confirm with customer"
+  - Time received (elapsed timer, color-escalating like KDS tickets)
+  - Message type badge: "🎤 Voice Note" or "💬 Text"
+  - If voice note: an inline audio player so staff can play the customer's voice message directly inside the ERP without leaving the page (use the stored Twilio media URL — fetch it server-side and proxy it to avoid CORS issues)
+  - If text: the message content displayed as-is
+  - A **"Take This Order"** button (claims it, sets `relayed_by_user_id` to that staff member's ID, prevents two staff members from working the same queue entry)
+
+**Step 5 — Staff confirms and fills the order:**
+- Clicking "Take This Order" opens the Order Confirmation Panel for that queue entry, which contains:
+  - **Customer name field** (pre-filled if available, editable)
+  - **Customer phone** (pre-filled, read-only — sourced from WhatsApp)
+  - **Delivery location field** (staff enters this after confirming with customer)
+  - **Item picker**: the same categorized menu picker from the Deliveryman Portal's Relay Order form — staff selects food items, quantities, and optional notes
+  - **Running total in AED**
+  - An **"Internal Note"** field (optional — staff can type what they heard on the voice note for audit trail, e.g. "customer said 2 doro wat and 1 tibs")
+  - A **"Confirm Order"** button
+- On "Confirm Order":
+  - Order status transitions from `"queue"` → `"pending_acceptance"` (now it enters the existing Phase 3 pipeline)
+  - `order_items` rows are inserted
+  - The Activity Timeline (Odoo-inspired, Phase 3) logs: "Order confirmed from WhatsApp voice queue by [Staff Name] — queue #[number]"
+  - A WebSocket event fires to the Chef Portal (branch kitchen room) — the order appears on KDS exactly like any other order
+  - **The Automated Lottery Lucky Number is triggered here** (see Module 2 — this is the exact hook point)
+  - The Order Queue view removes this entry from the `"queue"` list and it now lives in the normal orders pipeline
+
+**Step 6 — Staff can also reject/dismiss a queue entry:**
+- If the voice message was spam, a wrong number, or the customer called back to cancel before confirmation: staff can **"Dismiss"** the entry from the queue, which sets `status = "dismissed"` with a required reason field. Dismissed entries are never deleted — they appear in a collapsible "Dismissed" history below the active queue for audit purposes.
+
+### 1.2 Queue Number System — Rules and Reset Logic
+
+- Queue numbers are **simple, human-readable integers starting from #1**.
+- They reset daily at midnight (server time, set to UAE timezone, UTC+4). So on any given day the first WhatsApp order is #1, the second is #2, etc.
+- Queue numbers are branch-specific — Branch A and Branch B each have their own independent #1, #2, #3 sequence per day.
+- The queue number sequence must be generated using a database-level approach (a per-branch, per-day sequence function or a MAX(queue_number) + 1 with a row-level lock) to prevent duplicate assignment if two messages arrive simultaneously.
+- Queue numbers are **display-only identifiers for staff convenience** — all backend logic (status transitions, WebSocket events, commission tracking, audit logs) uses the internal `order_id` and `order_code` exclusively. The queue number never appears in any financial calculation, commission record, or API filter.
+- In the Order Intake View, queue numbers from prior days are not shown (but accessible in order history).
+
+### 1.3 New Database Schema Elements
+
+Add to the existing schema:
+
+**`orders` table — new columns:**
+- `queue_number` (integer, nullable — only set for `whatsapp_voice` channel orders)
+- `whatsapp_message_id` (text, nullable — Twilio message SID for threading)
+- `whatsapp_message_type` (enum: `"text"`, `"voice"`, `"image"`, nullable)
+- `whatsapp_media_url` (text, nullable — for voice notes)
+- `auto_reply_sent` (boolean, default true)
+- `intake_claimed_by_user_id` (FK to users, nullable — which Order Intake Staff claimed this queue entry)
+- `intake_claimed_at` (timestamp, nullable)
+
+**`orders.status` enum — new value:**
+- Add `"queue"` as the initial state for `whatsapp_voice` channel orders, sitting before `"pending_acceptance"` in the state machine. The full updated sequence: `"queue"` → `"pending_acceptance"` → `"preparing"` → `"ready"` → `"claimed"` → `"out_for_delivery"` → `"delivered"` / `"failed"`.
+
+**`orders.channel` enum — new value:**
+- Add `"whatsapp_voice"` alongside the existing `"whatsapp_relay"` and `"webapp"`.
+
+**`whatsapp_messages` table (new — for Unified Messaging Hub):**
+- `id`, `branch_id`, `order_id` (nullable FK), `customer_phone`, `direction` (enum: `"inbound"`, `"outbound"`), `message_type` (enum: `"text"`, `"voice"`, `"template"`), `content` (text, nullable), `media_url` (text, nullable), `twilio_message_sid`, `sent_at`, `delivered_at` (nullable), `read_at` (nullable), `status` (enum: `"sent"`, `"delivered"`, `"read"`, `"failed"`).
+
+### 1.4 New Role — Order Intake Staff
+
+Add `"order_intake"` as a new RBAC role alongside the existing roles. Access permissions:
+- **Can access:** Order Queue view, Order Confirmation Panel, menu item list (read-only, for the item picker), customer details for their branch only.
+- **Cannot access:** Finance, Payroll, Inventory management, Staff management, Branches, Lottery draw controls, Marketing engine, Addis portal.
+- This role appears in the Worker Registration form (Phase 2/3 carry-forward) so the Super Admin can assign it to staff.
+
+### 1.5 UI — Order Queue View Spec
+
+Design this screen for a desktop/tablet environment (Order Intake Staff typically works at a counter, not on a phone while moving):
+
+- **Header row:** "Order Queue — [Branch Name] — Today" with a live count badge ("5 pending")
+- **Active queue** (cards sorted oldest-first):
+  - Each card: large `#N` number (amber/gold, 36px bold) | customer phone | elapsed time (color-escalating: green < 5min, amber 5–10min, red > 10min) | message type badge | voice player or text preview | "Take This Order" button
+  - Cards claimed by another staff member show "Being handled by [Name]" and are greyed out but visible
+- **Dismissed entries** (collapsed section below, expandable): shows dismissed entries for today with dismissal reason and who dismissed them
+- Real-time: new entries appear at the top with a subtle slide-in animation and a soft chime (same sound system as KDS) — no refresh needed, Socket.IO push
+
+---
+
+## MODULE 2 — AUTOMATED LOTTERY LUCKY NUMBER ENGINE
+
+### 2.0 What This Does
+
+When a customer's order transitions from `pending_acceptance` to `preparing` (meaning: the chef has accepted it and begun cooking), the system automatically:
+1. Generates a unique lucky number for that customer
+2. Sends it to the customer's WhatsApp number immediately via Twilio
+3. Records the lucky number as a lottery entry in the database
+
+At the end of the day, the manager runs the draw from the Admin Command Center, winners are selected, and winner notifications are automatically sent to their WhatsApp numbers.
+
+This replaces the old manual process (writing lot numbers on paper, manually messaging winners, using a separate external website to run the draw) with a fully automated, auditable, zero-paper system.
+
+### 2.1 Lucky Number Generation — Trigger Point and Logic
+
+**Trigger:** The lucky number is generated and sent at the exact moment `orders.status` transitions to `"preparing"` (chef taps "Accept" on the KDS). This is deliberate — it means:
+- The order is real and confirmed (not just a queue shell or a spam message)
+- The chef has committed to making it
+- The customer deserves the acknowledgment that their food is being prepared
+
+**Generation logic:**
+- Lucky numbers are **6-digit integers** (e.g., `#482917`) — long enough to feel unique and lottery-like, short enough to read over WhatsApp.
+- They must be **unique per draw period** (per branch, per day — since draws happen daily). Use a combination of a daily sequence and a random component, then check for uniqueness against the `lottery_entries` table before committing: generate candidate → check DB → if collision, regenerate → insert. The collision probability on 6-digit numbers for a restaurant's daily order volume is negligible but the check must still exist.
+- Lucky numbers are **not sequential** — a customer should not be able to guess other customers' numbers. Use `Math.floor(100000 + Math.random() * 900000)` as the generator (giving values 100000–999999) with the uniqueness check above.
+- One lucky number per order (not per customer per day — if a customer orders twice in one day, they get two separate lucky numbers and two separate chances).
+
+### 2.2 WhatsApp Lucky Number Message
+
+Immediately after generating the lucky number and inserting the lottery entry, send a real outbound WhatsApp message via Twilio to the customer's phone number:
+
+**Message content (bilingual Amharic/English):**
+> *ቲጂ ምግብ ቤት ✨*
+>
+> *ትዕዛዝዎ ተቀብለናል! ምግብዎ እየተዘጋጀ ነው።*
+> *የዕድል ቁጥርዎ: **#[lucky_number]***
+>
+> *---*
+>
+> *TG's Restaurant ✨*
+> *Your order is confirmed and being prepared!*
+> *Your lucky number: **#[lucky_number]***
+>
+> *🎯 Today's draw happens at [draw_time]. Good luck!*
+
+- `[lucky_number]` and `[draw_time]` are dynamically inserted from the database.
+- `[draw_time]` is the daily draw time configured by the manager in the Lottery Settings panel (see Section 2.5).
+- The message must use Twilio's WhatsApp template API (approved template) or, if within a 24-hour customer-initiated session window, a free-form message. Implement both: try free-form first (within session window), fall back to template if the session has expired.
+- Log this outbound message in `whatsapp_messages` table as `direction = "outbound"`, `message_type = "template"`, linked to the `order_id`.
+- If the send fails (Twilio error, invalid number, etc.), log the failure in the `lottery_entries` row (`lucky_number_sent = false`) and surface an alert in the Admin lottery panel ("3 lucky numbers failed to send — [view details]").
+
+### 2.3 Database Schema — Lottery Module
+
+**`lottery_entries` table (replace/upgrade the existing lottery tables from Phase 2):**
+- `id`
+- `branch_id` (FK)
+- `order_id` (FK — the specific order this entry is tied to)
+- `customer_phone` (denormalized copy for quick querying without joins)
+- `customer_name` (denormalized copy)
+- `lucky_number` (6-digit integer, unique per branch per draw_date)
+- `draw_date` (date — which day's draw this entry belongs to)
+- `lucky_number_sent` (boolean, default false — updated to true after successful Twilio send)
+- `lucky_number_sent_at` (timestamp, nullable)
+- `twilio_message_sid` (text, nullable)
+- `is_winner` (boolean, default false)
+- `prize_tier` (text, nullable — set if winner: "First Prize", "Second Prize", etc.)
+- `winner_notified` (boolean, default false)
+- `winner_notified_at` (timestamp, nullable)
+- `created_at`
+
+**`lottery_draws` table (replace/upgrade existing):**
+- `id`
+- `branch_id` (FK)
+- `draw_date` (date)
+- `draw_time` (time — when the draw was configured to happen / actually happened)
+- `status` (enum: `"scheduled"`, `"in_progress"`, `"completed"`)
+- `total_entries` (integer — count of eligible entries at time of draw)
+- `prize_config` (JSONB — stores the prize tier configuration: `[{"tier": "First Prize", "count": 1, "prize": "Free Meal"}, {"tier": "Second Prize", "count": 3, "prize": "50% Discount"}]`)
+- `drawn_by_user_id` (FK — which admin ran the draw)
+- `drawn_at` (timestamp)
+- `random_seed` (text — stored for auditability/reproducibility of the random selection)
+- `created_at`
+
+**`lottery_winners` table:**
+- `id`
+- `draw_id` (FK)
+- `entry_id` (FK to `lottery_entries`)
+- `prize_tier`
+- `prize_description`
+- `notification_status` (enum: `"pending"`, `"sent"`, `"failed"`)
+- `notification_sent_at` (timestamp, nullable)
+- `twilio_message_sid` (text, nullable)
+
+### 2.4 End-of-Day Draw — Admin Flow
+
+In the Admin Command Center, under the **Lottery** section, the manager sees:
+
+**Pre-draw view (during the day):**
+- Live counter: "Today's entries: 47 lucky numbers issued across [branch]"
+- Live list of today's entries (customer phone masked for privacy: `+971 5x xxx x782`, lucky number, order code, time issued, sent status)
+- "Failed to send" alerts with retry button for individual failed entries
+- Configured draw time countdown: "Draw in 2h 14m"
+
+**Draw execution view (manager-initiated):**
+- "Run Today's Draw" button — prominent, requires confirmation modal ("You are about to draw winners from 47 entries. This cannot be undone.")
+- On confirm:
+  1. System fetches all `lottery_entries` for today's date and this branch with `lucky_number_sent = true` (only entries where the customer actually received their number are eligible — fairness rule)
+  2. For each prize tier (in order from lowest to highest), randomly selects the configured number of winners using a cryptographically seeded random function (`crypto.randomBytes` based seed, stored in `lottery_draws.random_seed` for auditability)
+  3. Winners are inserted into `lottery_winners`
+  4. `lottery_entries.is_winner` and `prize_tier` are updated for winning rows
+  5. **Winner WhatsApp notifications are sent automatically** (see Section 2.5)
+  6. Draw status becomes `"completed"`
+- Draw results are shown immediately on screen: a cinematic reveal animation (cards flipping, confetti particle effect, winner entries highlighting in gold) — this is the flagship visual moment of the lottery module, make it memorable
+
+**Post-draw view:**
+- List of winners with their prize tier, phone number, lucky number, and notification status
+- "Resend notification" button for any winner where notification failed
+- Full draw audit: timestamp, seed, total pool, drawn by whom — permanently stored
+
+### 2.5 Winner WhatsApp Notification (Auto-sent immediately after draw)
+
+For each winner, the system sends a real outbound WhatsApp message via Twilio:
+
+**Message content (bilingual):**
+> *🎉 እንኳን ደስ አለዎ! ቲጂ ምግብ ቤት*
+>
+> *የዕድል ቁጥርዎ **#[lucky_number]** አሸንፏል!*
+> *ሽልማት: [prize_description]*
+>
+> *ሽልማቱን ለማግኘት ይደውሉ ወይም ዋትስአፕ ያድርጉ።*
+>
+> *---*
+>
+> *🎉 Congratulations! TG's Restaurant*
+>
+> *Your lucky number **#[lucky_number]** is a winner!*
+> *Prize: [prize_description]*
+>
+> *Please call or WhatsApp us to claim your prize.*
+
+- `[lucky_number]` and `[prize_description]` dynamically inserted.
+- Sent to the phone number stored in `lottery_entries.customer_phone`.
+- Logged in `whatsapp_messages` and `lottery_winners.notification_status` updated accordingly.
+- If any winner notification fails, the Admin lottery panel shows a clear alert with a manual resend button.
+
+### 2.6 Lottery Settings Panel (Admin Only)
+
+A new **Settings → Lottery Configuration** section (Super Admin and Branch Manager access):
+- Daily draw time (time picker — default: 10:00 PM UAE time)
+- Prize tier configuration (dynamic add/edit/remove prize tiers): tier name, number of winners, prize description
+- Eligibility rule: "All confirmed orders" (default) or "Orders above [X] AED minimum" (optional threshold)
+- Toggle: "Auto-run draw at scheduled time" (uses node-cron) vs. "Manual draw only" — if auto-run is enabled, the cron job runs the draw at the configured time and sends all notifications without any human action
+- Auto-reply message template editor: lets admin customize the Amharic/English lucky number message and winner message (with `{{lucky_number}}`, `{{draw_time}}`, `{{prize_description}}` placeholders)
+- Branch-specific settings — each branch can have its own draw time and prize configuration
+
+### 2.7 Customer Lucky Number Lookup
+
+On the public Customer Webapp (`/menu-public` or a dedicated `/my-lucky-number` page):
+- Simple lookup form: enter phone number → shows all today's lottery entries for that phone number (lucky numbers, associated order codes, draw time)
+- After draw: shows whether any of their numbers won and what prize
+- This is a read-only public endpoint, rate-limited (max 10 lookups per phone per hour) to prevent abuse
+
+---
+
+## MODULE 3 — ADDIS ABABA IMPORT SUPPLY CHAIN
+
+### 3.0 What This Solves
+
+TG's Restaurant imports certain ingredients and materials from Ethiopia to Dubai. Currently, the cost of these imports is tracked manually and never appears in the ERP's financial picture, making the Finance module's P&L incomplete. This module creates a dedicated import ledger where Ethiopia-based staff log every shipment, the Dubai manager tracks what's been paid vs. what's owed on credit, and the full import cost feeds automatically into the Finance module's expense calculations — closing the loop on the restaurant's true cost of goods.
+
+### 3.1 New Role — Addis Ababa Staff
+
+Add `"addis_staff"` as a new RBAC role. This role is designed for staff physically based in Addis Ababa, Ethiopia, accessing the ERP remotely over the internet.
+
+**Access permissions:**
+- **Can access:** Addis Ababa Portal only — shipment logging, supplier management, their own shipment history.
+- **Cannot access:** Orders, KDS, Finance P&L, Staff management, Branch management, Lottery draw controls, Marketing engine, UAE operational data.
+- This is effectively a remote data-entry role with a focused single-purpose interface.
+
+**Security note:** Addis Ababa Staff accounts must still use JWT auth with the standard RBAC middleware — they authenticate against the same `users` table with `role = "addis_staff"` and `branch_id` set to whichever Dubai branch they supply. Their session is scoped server-side; they cannot access any API route outside their permitted scope regardless of what they send in the request.
+
+### 3.2 Addis Ababa Portal — Staff View
+
+A new portal section (route: `/addis/*` or a clearly named section) with its own focused sidebar:
+
+**Page 1 — Log New Shipment:**
+A form for logging a new import shipment with these fields:
+- Shipment reference (free text, e.g. "June Batch 1" — for staff to identify it)
+- Shipment date (date picker — when it was sent from Addis)
+- Estimated arrival date (optional)
+- Destination branch (dropdown — which Dubai branch this goes to)
+- Supplier (dropdown from `suppliers_addis` table, or "Add new supplier" inline)
+- **Shipment items** (repeatable line items, add as many as needed):
+  - Item/material name (text, e.g. "Berbere spice mix", "Injera flour")
+  - Quantity (number)
+  - Unit (text: kg, bags, boxes, etc.)
+  - Unit cost in ETB (Ethiopian Birr — staff enter in their local currency)
+  - Unit cost in AED (optional — can be auto-calculated if an exchange rate is set in Settings, or entered manually)
+  - Total cost (auto-calculated: quantity × unit cost, shown in both ETB and AED)
+- Shipment notes (optional free text)
+- **"Submit Shipment"** button
+
+On submit:
+- Creates a `import_shipments` row and linked `import_shipment_items` rows
+- The shipment appears immediately (via real-time push) in the Dubai Admin's Import Ledger view
+- Status defaults to `"sent"` (not yet received in Dubai)
+
+**Page 2 — My Shipment History:**
+- List of all shipments logged by this staff member
+- Status for each: Sent / In Transit / Received / Paid / Partially Paid / Credit Outstanding
+- Each shipment expandable to show its line items and payment history
+
+**Page 3 — Suppliers (Addis):**
+- Simple CRUD for supplier records: name, contact phone, contact email, address in Ethiopia, notes
+- These suppliers appear in the shipment log form dropdown
+
+### 3.3 Dubai Admin — Import Ledger View
+
+In the Admin Command Center, a new **"Import Supply Chain"** section in the sidebar (visible to Super Admin and Branch Manager):
+
+**Import Ledger main view:**
+- Tabs: "All Shipments" | "Outstanding Credit" | "Paid" | "In Transit"
+- Each shipment card shows:
+  - Shipment reference and date
+  - From: supplier name (Addis Ababa side)
+  - To: branch name (Dubai side)
+  - Total value in AED
+  - Payment status badge: `Paid ✓` (green) | `Partial — AED [X] remaining` (amber) | `Unpaid — AED [X] credit` (red)
+  - Items summary (collapsible): line-by-line list of what was shipped
+  - Receive confirmation button (if status is "In Transit" or "Sent"): manager clicks **"Mark as Received"** → updates status to `"received"`, timestamps it, optionally notes any discrepancy (e.g., "2 bags of flour were damaged")
+  - Payment recording: **"Record Payment"** button → opens a panel to log a payment against this shipment: amount in AED, payment date, payment method (bank transfer, cash, etc.), notes. Partial payments are allowed — the outstanding balance updates automatically.
+
+**Credit Summary panel (top of the page):**
+- Total outstanding credit across all suppliers: `AED [X]`
+- Per-supplier breakdown: "Supplier A — AED [X] owed across [N] shipments"
+- Overdue alert: shipments where credit has been outstanding more than [X] days (configurable in settings)
+
+**Exchange Rate Setting:**
+- A simple field in Settings where Super Admin sets the current ETB/AED exchange rate used for auto-conversion when Addis staff enter ETB prices
+- Does not need to be live/automatic — manual update by admin is fine for MVP
+
+### 3.4 Database Schema — Import Supply Chain
+
+New tables:
+
+**`suppliers_addis` table:**
+- `id`, `name`, `contact_phone`, `contact_email`, `address_ethiopia`, `notes`, `active`, `created_by_user_id`, `created_at`
+
+**`import_shipments` table:**
+- `id`
+- `branch_id` (FK — destination Dubai branch)
+- `supplier_id` (FK to `suppliers_addis`)
+- `reference` (text — human-readable shipment name)
+- `sent_date` (date)
+- `estimated_arrival_date` (date, nullable)
+- `actual_arrival_date` (date, nullable)
+- `status` (enum: `"sent"`, `"in_transit"`, `"received"`, `"discrepancy_noted"`)
+- `total_value_etb` (decimal)
+- `total_value_aed` (decimal)
+- `exchange_rate_used` (decimal — snapshot of the rate at time of logging)
+- `notes` (text, nullable)
+- `discrepancy_notes` (text, nullable)
+- `logged_by_user_id` (FK — Addis staff who logged it)
+- `received_by_user_id` (FK — Dubai admin who marked it received, nullable)
+- `received_at` (timestamp, nullable)
+- `created_at`
+
+**`import_shipment_items` table:**
+- `id`, `shipment_id` (FK), `item_name`, `quantity`, `unit`, `unit_cost_etb`, `unit_cost_aed`, `total_cost_etb`, `total_cost_aed`
+
+**`import_payments` table:**
+- `id`
+- `shipment_id` (FK to `import_shipments`)
+- `amount_aed` (decimal)
+- `payment_date` (date)
+- `payment_method` (text)
+- `notes` (text, nullable)
+- `recorded_by_user_id` (FK)
+- `created_at`
+
+**Computed field (view or calculated in application layer):**
+- `outstanding_balance_aed = import_shipments.total_value_aed - SUM(import_payments.amount_aed)` — use a DB view or always calculate this in the API query; never store it as a column (it changes as payments are recorded).
+
+### 3.5 Finance Module Integration
+
+Import shipments must appear in the Finance module's expense calculations so the P&L is complete and accurate:
+
+- In the Finance module, add a new expense category: **"Import Costs (Addis)"**
+- When a shipment's status becomes `"received"` (manager confirms it arrived in Dubai), its `total_value_aed` is counted as an expense for that date in the Finance engine — it becomes part of the branch's total expenses and therefore affects the P&L calculation
+- In the Finance → Expenses breakdown view, "Import Costs (Addis)" appears as its own line item category alongside "Staff Wages," "Inventory," "Delivery Costs," etc.
+- Payments recorded against a shipment update the Finance view's "Accounts Payable" section to reflect the outstanding credit correctly (what's been received but not yet paid = a liability)
+- In the Multi-Branch Consolidated Reporting view (Odoo-inspired feature from Phase 3), Super Admin can see import costs aggregated across all branches or per branch
+
+### 3.6 Notifications — Import Alerts
+
+Real-time alerts (Socket.IO push to Admin Command Center) for:
+- New shipment logged by Addis staff: "New shipment from [Supplier] — AED [X] — Branch [Name]"
+- Shipment arrives at estimated arrival date and hasn't been marked received yet: "Shipment [Ref] was due today — please confirm receipt"
+- Credit outstanding for more than [X] days (configurable threshold): "Outstanding credit to [Supplier] — AED [X] — [N] days overdue"
+
+---
+
+## 4. SHARED TECHNICAL REQUIREMENTS ACROSS ALL THREE MODULES
+
+### 4.1 Twilio / WhatsApp API — Shared Sending Layer
+
+All three modules (Voice Queue auto-reply, Lottery lucky number, Lottery winner notification) use the same Twilio WhatsApp sending function. Build a single, reusable server-side function `sendWhatsAppMessage(to, body, templateId?)` that:
+- Accepts a phone number, message body, and optional template ID
+- Handles the logic of detecting whether a 24-hour customer-initiated session is active (check `whatsapp_messages` table for last inbound from this number) and if so sends free-form; if not, sends as a template
+- Logs every outbound message to `whatsapp_messages` with status tracking
+- Returns success/failure with the Twilio message SID on success
+- On failure: logs the error, does NOT throw (never crash the order flow because a WA message failed) — returns the failure details for the caller to handle gracefully
+- Retry logic: if a send fails with a retriable error (Twilio 5xx), automatically retry once after 5 seconds
+
+### 4.2 node-cron Jobs
+
+Add the following scheduled jobs:
+- **Daily draw auto-run** (if enabled in Lottery Settings): runs at the configured draw time per branch, calls the same draw logic as the manual "Run Draw" button
+- **Queue number reset**: runs at midnight UAE time (UTC+4), resets the per-branch daily queue counter
+- **Import overdue alert**: runs daily at 9:00 AM UAE time, checks for shipments past estimated arrival or credit overdue beyond the configured threshold, pushes alerts to Admin dashboard
+- **Lucky number send retry**: runs every 15 minutes, picks up any `lottery_entries` where `lucky_number_sent = false` and retries the Twilio send (max 3 total attempts per entry)
+- All cron jobs must log their execution (start, completion, any errors) to a `cron_job_logs` table for admin visibility
+
+### 4.3 Admin — Cron Job Monitor
+
+A small panel in Settings → System (Super Admin only) showing:
+- Each scheduled job, its last run time, next run time, and last run status (success / failed / running)
+- Manual "Run Now" button for each job (useful for testing)
+- Last 10 run log entries per job
+
+### 4.4 Activity Timeline Integration
+
+Every significant action across all three new modules must generate an Activity Timeline entry (the Odoo-inspired chatter from Phase 3) on the relevant Order record:
+
+- "WhatsApp message received — queue #[N] assigned" (on webhook receipt)
+- "Auto-reply sent to customer with queue number #[N]" (on auto-reply)
+- "Order intake claimed by [Staff Name]" (on Take This Order)
+- "Lucky number #[XXXXXX] generated and sent to [phone]" (on lottery entry creation)
+- "Shipment [Ref] logged by [Addis Staff Name] — AED [X]" (on new shipment — appears in Finance/branch records)
+- "Payment of AED [X] recorded against shipment [Ref]" (on payment record)
+
+### 4.5 Responsiveness
+
+All new views (Order Queue, Lottery Draw, Addis Portal, Import Ledger) must be fully responsive:
+- Order Queue: desktop-optimized (counter station use) but tablet-usable
+- Lottery Draw: desktop — this is a manager ceremony with the animated reveal
+- Addis Ababa Portal: mobile-first — staff in Ethiopia likely access on a phone
+- Import Ledger: desktop/tablet — manager at a desk reviewing financials
+
+### 4.6 Cinematic Styling Additions
+
+Extend the existing dark amber/gold-on-charcoal visual identity to all new elements:
+
+**Order Queue cards:** Each queue card has a left-side amber border that turns red as time elapses (CSS transition, driven by elapsed minutes). The `#N` queue number badge is oversized (36px, bold, amber/gold) — it's the most important visual element on the card. Voice note audio player uses a minimal custom styled `<audio>` element matching the dark theme.
+
+**Lottery Lucky Number reveal:** When the lucky number is first generated and stored (chef accepts the order), the lucky number field on the order's Activity Timeline should animate in with a brief golden shimmer effect. In the Admin Lottery view, the live counter of "today's entries" increments with a smooth count-up animation each time a new lucky number is issued.
+
+**Lottery Draw reveal animation:** This is the signature visual moment. When "Run Draw" is confirmed:
+- The screen dims to a focused "draw mode" overlay
+- All eligible entry cards are displayed in a shuffled, animated grid
+- A countdown (3... 2... 1...) then winning cards flip/highlight in gold, one by one per prize tier, with a confetti particle burst
+- The animation must complete within 5–8 seconds total — dramatic but not so long it frustrates the manager
+- After animation: clean winner list with share/screenshot button
+
+**Addis Ababa Portal:** Use the same dark theme but with a distinctive accent color for Addis-specific views (a warm terracotta/rust instead of the gold, to visually distinguish it as a different geographic context without breaking the overall product family feel). A small "🇪🇹 Addis Ababa" badge on the portal header makes the geographic context unmistakable.
+
+**Import Ledger credit status:** Outstanding credit badges should visually escalate — small amber for recent credit, bright red with a subtle pulse for overdue credit. The total outstanding credit figure at the top of the Import Ledger is displayed in a large, readable format (not buried in a table) so the manager can see it at a glance.
+
+---
+
+## 5. FINAL VERIFICATION CHECKLIST
+
+**Module 1 — WhatsApp Voice Queue:**
+- [ ] A WhatsApp voice or text message sent to the restaurant number creates an `orders` row with `status = "queue"` and the correct `queue_number` (branch-scoped, daily-resetting) within 2 seconds of message receipt.
+- [ ] An automatic bilingual WhatsApp reply is sent to the customer with their queue number immediately after.
+- [ ] The new order appears on the Order Queue view in real time (no refresh) with the correct number badge, elapsed timer, and audio player (for voice notes).
+- [ ] "Take This Order" atomically claims the entry and prevents double-claiming by two staff members.
+- [ ] Confirming an order from the queue transitions it to `pending_acceptance`, inserts order items, fires the WebSocket event to the Chef Portal KDS, triggers the Lottery lucky number (Module 2), and logs the full Activity Timeline entry.
+- [ ] Queue numbers reset to #1 at midnight UAE time for each branch.
+- [ ] Dismissed entries are logged with reason and never deleted.
+
+**Module 2 — Automated Lottery Engine:**
+- [ ] Every order that transitions to `"preparing"` (chef accepts it) automatically generates a unique 6-digit lucky number and sends it to the customer's WhatsApp number within 5 seconds.
+- [ ] The lucky number message is bilingual (Amharic + English) and includes the configured draw time.
+- [ ] Failed sends are flagged in the Admin lottery panel with a manual retry option.
+- [ ] The cron job retry picks up failed sends every 15 minutes (max 3 attempts).
+- [ ] The Admin "Run Draw" flow: selects from only entries where `lucky_number_sent = true`, uses a seeded random function, stores the seed, inserts winners, and triggers winner WhatsApp notifications automatically.
+- [ ] Winner notifications are bilingual and include the lucky number and prize.
+- [ ] The draw reveal animation plays on screen (cinematic confetti/flip reveal, 5–8 seconds total).
+- [ ] Auto-draw cron runs at the configured time if enabled, producing the same result as manual draw.
+- [ ] Customer lucky number lookup works on the public `/my-lucky-number` page.
+- [ ] All lottery actions appear in the Activity Timeline of the associated order.
+
+**Module 3 — Addis Ababa Supply Chain:**
+- [ ] A new `addis_staff` role user can log in and access only the Addis Ababa Portal — no other section of the ERP is visible or accessible via API.
+- [ ] Submitting a new shipment from the Addis portal creates the correct DB rows and immediately appears in the Dubai Admin's Import Ledger.
+- [ ] "Mark as Received" updates status and timestamps; discrepancy notes are saved.
+- [ ] "Record Payment" correctly reduces the outstanding balance shown in the Import Ledger.
+- [ ] The credit/paid status badges correctly reflect the computed balance (not a static field).
+- [ ] Import costs from received shipments appear as "Import Costs (Addis)" in the Finance module's expense breakdown and affect the P&L calculation for the correct date.
+- [ ] Overdue credit alerts fire from the daily cron job and appear in the Admin dashboard.
+- [ ] The Addis Ababa Portal is mobile-responsive and usable on a phone.
+
+**Cross-cutting:**
+- [ ] All Twilio WhatsApp sends (auto-reply, lucky number, winner notification) use the single shared `sendWhatsAppMessage()` function with proper error handling — no send failure crashes any order flow.
+- [ ] All cron jobs are visible in the Settings → System cron monitor with last-run status.
+- [ ] All new tables have proper foreign keys, indexes on frequently queried columns, and no orphaned data possible on cascade delete scenarios.
+- [ ] All new views (Order Queue, Lottery, Addis Portal, Import Ledger) are correctly restricted to authorized roles server-side — not just hidden in the UI.
+
+---
+
+## 6. FINAL INSTRUCTION TO REPLIT AGENT
+
+Build these three modules in the order listed: Voice Queue first (it's the most core to daily operations), Lottery second (it builds directly on the Voice Queue trigger point), Addis Supply Chain third (it's the most independent).
+
+For the Voice Queue: implement the webhook handler and auto-reply first — test it by sending a real (or simulated) WhatsApp message and confirming the DB row is created and the reply is sent before building the Order Queue UI on top.
+
+For the Lottery: implement the `preparing` status hook and lucky number generation/send first — test it by manually transitioning an order to `preparing` and confirming the entry is created and the WA message is sent. Build the Draw UI on top of working data.
+
+For the Addis Supply Chain: implement the new role + Addis Portal first, confirm a logged shipment appears in the Admin ledger, then wire the Finance integration.
+
+Do not mark any module complete until you have tested its full end-to-end flow with real data and confirmed every checklist item above passes. Specifically for Twilio integration: use real Twilio sandbox credentials (or production if available) and confirm actual messages are sent and received on a physical device before declaring the WhatsApp sending layer complete.

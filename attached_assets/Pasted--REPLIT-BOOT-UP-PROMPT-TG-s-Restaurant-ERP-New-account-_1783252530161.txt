@@ -1,0 +1,302 @@
+# REPLIT BOOT-UP PROMPT — TG's Restaurant ERP (ቲጂ ምግብ ቤት)
+### New account / new Replit — get everything running from GitHub import
+
+---
+
+## READ THIS FULLY BEFORE TOUCHING ANYTHING
+
+This is a production-grade, multi-portal restaurant ERP system imported from GitHub. It is a **pnpm monorepo** with multiple sub-packages. Your only job right now is to understand the structure, install dependencies, configure the environment, run the database, and confirm every portal is working. Do **not** modify any feature code, refactor anything, or "improve" anything — just make it run exactly as it was built.
+
+---
+
+## WHAT THIS SYSTEM IS
+
+TG's Restaurant ERP is a **delivery-only** Ethiopian restaurant management system operating in Dubai, UAE. It has **four separate role-based portals** all served from one backend:
+
+| Portal | URL | Who uses it |
+|---|---|---|
+| Admin Command Center | `/` or `/admin` | Super Admin, Branch Manager |
+| Chef Portal | `/kitchen` | Kitchen staff only |
+| Deliveryman Portal | `/delivery` | Delivery staff only |
+| Addis Ababa Portal | `/addis` | Ethiopia-based supply staff only |
+| Customer Webapp | `/menu-public` | Public customers (no login) |
+| Order Tracker | `/track/:code` | Public customers (no login) |
+
+Each role can **only** access their own portal. Login redirects automatically based on role. This is enforced server-side — not just in the UI.
+
+---
+
+## STEP 1 — UNDERSTAND THE PROJECT STRUCTURE
+
+After importing from GitHub, you will see a monorepo like this:
+
+```
+/artifacts/
+  /tg-erp/              ← Main React + Vite frontend (all portals in one build)
+  /api-server/          ← Express backend (REST API + Socket.IO)
+  /mockup-sandbox/      ← Ignore this — internal design tool only
+/lib/
+  /db/                  ← PostgreSQL schema (Drizzle ORM) + migrations
+  /api-zod/             ← Shared Zod validation types
+  /api-client-react/    ← Shared React Query API client
+  /api-spec/            ← OpenAPI spec (used to generate api-zod and api-client-react)
+/scripts/               ← Seed scripts and utilities
+pnpm-workspace.yaml     ← Monorepo workspace definition
+package.json            ← Root package (orchestrates all sub-packages)
+replit.md               ← Read this — it has project-specific run instructions
+```
+
+**Read `replit.md` and the root `package.json` before running anything.** They define the exact commands needed to start this project.
+
+---
+
+## STEP 2 — SET UP ENVIRONMENT VARIABLES
+
+Go to Replit's **Secrets** panel (the lock icon in the sidebar) and add every variable below. Do not put secrets in `.env` files committed to the repo.
+
+**Required to boot (system will crash without these):**
+
+| Secret Key | Value |
+|---|---|
+| `DATABASE_URL` | PostgreSQL connection string — set this up in Step 3 first |
+| `JWT_SECRET` | Any random 64-character string |
+| `JWT_REFRESH_SECRET` | A different random 64-character string |
+| `SETTINGS_ENCRYPTION_KEY` | Any random 32-character string (used to encrypt API keys stored in DB settings table) |
+| `NODE_ENV` | `development` |
+| `PORT` | `3000` |
+
+**Required for full functionality (set to `placeholder` for now if you don't have them yet):**
+
+| Secret Key | Value |
+|---|---|
+| `TWILIO_ACCOUNT_SID` | `placeholder` |
+| `TWILIO_AUTH_TOKEN` | `placeholder` |
+| `TWILIO_WHATSAPP_NUMBER` | `placeholder` |
+| `SENDGRID_API_KEY` | `placeholder` |
+
+**Scan the codebase for any other `process.env.` references not listed above and add those to Secrets too.** A missing env variable causes silent crashes — find them all before starting.
+
+---
+
+## STEP 3 — SET UP POSTGRESQL DATABASE
+
+1. In Replit, go to the **Database** tab in the sidebar and create a new PostgreSQL database. Copy the connection string it gives you.
+2. Add it as `DATABASE_URL` in Secrets (from Step 2).
+3. Run the database schema push. Look inside `lib/db/` for the Drizzle config — the command is likely one of:
+```bash
+cd lib/db && npx drizzle-kit push
+```
+or from root:
+```bash
+pnpm run db:push
+```
+Run whichever exists. Do not skip this — the server will crash with "relation does not exist" errors without it.
+
+4. Run the seed script to populate demo data (users, branches, menu items, sample orders):
+```bash
+pnpm run db:seed
+```
+or:
+```bash
+cd scripts && npx tsx src/seed.ts
+```
+
+5. Confirm tables exist by running a quick check:
+```bash
+psql $DATABASE_URL -c "\dt"
+```
+You should see 20+ tables including `users`, `orders`, `menu_items`, `branches`, `lottery_entries`, `import_shipments`, `settings`, etc.
+
+---
+
+## STEP 4 — INSTALL ALL DEPENDENCIES
+
+This is a pnpm monorepo. **Always install from the root — never cd into sub-folders and run install separately.**
+
+```bash
+pnpm install
+```
+
+If pnpm is not available:
+```bash
+npm install -g pnpm
+pnpm install
+```
+
+If you get peer dependency errors, read them carefully — do not use `--force`. Fix the root cause (usually a Node version issue — this project requires Node 18+).
+
+---
+
+## STEP 5 — START THE SYSTEM
+
+Check the root `package.json` for the dev script. It likely starts everything in parallel:
+
+```bash
+pnpm run dev
+```
+
+If there is no combined dev script, start each part in a separate Shell tab:
+
+```bash
+# Shell tab 1 — API server
+cd artifacts/api-server && pnpm run dev
+
+# Shell tab 2 — Frontend
+cd artifacts/tg-erp && pnpm run dev
+```
+
+Wait for both to report ready:
+- API server: `Server listening on port 3000` (or similar)
+- Frontend: `Local: http://localhost:5173` (or similar Vite output)
+
+---
+
+## STEP 6 — VERIFY ALL PORTALS ARE WORKING
+
+Test each portal and login separately. Do not report the system as running until every item below passes.
+
+---
+
+### ✅ Super Admin Portal
+
+URL: the main Replit preview URL (root `/`)
+
+Login credentials:
+- Phone: `+251911001001`
+- Password: `admin123`
+
+After login you should see the **Admin Command Center** with a full sidebar including:
+Dashboard, Orders, Kitchen (KDS), Deliveries, Menu, Inventory, Finance, Payroll, Lottery, Staff, Branches, Customers, Order Queue, Addis Supply Chain, Audit & Reports, Settings
+
+Check:
+- [ ] Dashboard loads with stats (orders today, revenue, active staff)
+- [ ] Orders page loads and shows order list
+- [ ] Staff page loads and shows staff members with role filter tabs (Chefs / Delivery / Order Intake / Addis / Admins)
+- [ ] Settings page loads (super admin only) with WhatsApp, Email, Lottery, System sections
+- [ ] Lottery page shows "Today's Lucky Numbers" table and Draw controls
+
+---
+
+### ✅ Chef Portal
+
+The system has seeded chef accounts. Log out of admin first.
+
+Login credentials (check seed data — typically):
+- Phone: `+251911001003`
+- Password: `TG@1234ab` or `admin123` (check the seed script for the actual chef credentials)
+
+After login you should be **automatically redirected to `/kitchen`** — NOT the admin dashboard.
+
+The Chef Portal should show:
+- [ ] A KDS (Kitchen Display System) with incoming order tickets
+- [ ] Large touch-friendly "Accept" and "Ready" buttons per ticket
+- [ ] Chef's name shown in the header (e.g. "Chef Aberash's Kitchen 👩‍🍳")
+- [ ] Live active order count in the header
+- [ ] Channel badges on tickets: "📱 WhatsApp Relay" / "🌐 Web Order" / "🎙️ Voice Queue"
+- [ ] If a chef tries to navigate to `/admin` — they should be redirected back to `/kitchen`
+
+---
+
+### ✅ Deliveryman Portal
+
+Login credentials (check seed data — typically):
+- Phone: `+251911001004`
+- Password: `TG@5678cd` or `admin123` (check seed script)
+
+After login you should be **automatically redirected to `/delivery`**.
+
+The Deliveryman Portal should show:
+- [ ] **Tab 1 — Relay Order**: a form with Customer Name, Phone, Location fields + a working menu picker showing all food categories and items
+- [ ] **Tab 2 — My Deliveries**: live queue of orders ready to claim or assigned to this rider
+- [ ] Rider's name shown in the header
+- [ ] Today's delivery count and commission total at the bottom
+- [ ] If a delivery staff tries to navigate to `/admin` — redirected back to `/delivery`
+
+**Critical test:** Submit a test relay order from this portal → confirm it appears on the Chef Portal in real time (open both in separate browser windows).
+
+---
+
+### ✅ Addis Ababa Portal
+
+Login credentials (check seed data):
+- Phone: `+251911001005` (or check seed script for addis_staff user)
+
+After login you should be **automatically redirected to `/addis`**.
+
+Should show:
+- [ ] Log New Shipment form
+- [ ] My Shipment History page
+- [ ] Suppliers management
+- [ ] No access to admin, kitchen, or delivery sections
+
+---
+
+### ✅ Customer Webapp (no login required)
+
+URL: `/menu-public`
+
+Should show:
+- [ ] TG's Restaurant branding
+- [ ] Menu categories and food items with prices in AED
+- [ ] Bilingual content (English + Amharic)
+- [ ] Ordering form: Name, Phone, Delivery Location, cart
+- [ ] After ordering: Order Code displayed + link to `/track/:code`
+
+---
+
+### ✅ Order Tracker (no login required)
+
+URL: `/track/[any-order-code-from-seed-data]`
+
+Should show:
+- [ ] Live order status timeline
+- [ ] Updates in real time via WebSocket (test by changing order status in admin)
+
+---
+
+## STEP 7 — VERIFY REAL-TIME IS WORKING
+
+Open two browser windows side by side:
+- Window 1: Logged in as Chef
+- Window 2: Logged in as Delivery Staff
+
+In Window 2 (Delivery): submit a relay order using the Relay Order form.
+In Window 1 (Chef): the new order should appear **within 2 seconds without any refresh**.
+
+If it requires a refresh, Socket.IO is not wired correctly — flag this immediately rather than reporting the system as working.
+
+---
+
+## STEP 8 — CONFIRM SECURITY IS WORKING
+
+Test these security rules explicitly:
+
+- [ ] Log in as a chef → try to navigate to `/admin/finance` → should be redirected to `/kitchen`
+- [ ] Call `GET /api/admin/users` with a chef's JWT in the Authorization header → should return `403 Forbidden`
+- [ ] Try logging in with wrong password 5 times → account should lock with a clear message
+- [ ] Creating a staff member with no branch assigned should be blocked by form validation
+
+---
+
+## STEP 9 — WHAT TO REPORT BACK
+
+Once everything above is confirmed, report:
+
+1. ✅ Live preview URL(s) for the frontend and API
+2. ✅ Confirmation that all 6 portals load and redirect correctly by role
+3. ✅ Confirmation that the two-browser real-time test (Step 7) passes
+4. ✅ Confirmation that the chef JWT is rejected on admin API routes (Step 8)
+5. ⚠️ Any items from the checklists that failed — be specific about what failed and what error appeared
+
+---
+
+## IMPORTANT — DO NOT DO ANY OF THESE
+
+- ❌ Do not modify any feature code, routes, or components
+- ❌ Do not refactor or "clean up" anything
+- ❌ Do not install new packages unless a dependency is genuinely missing and causes a crash
+- ❌ Do not create new database tables or change the schema
+- ❌ Do not add walk-in or dine-in order options (this is a delivery-only restaurant)
+- ❌ Do not run `npm install` inside sub-folders — always install from root with `pnpm install`
+
+The next phase of upgrades will be given as a separate prompt once the system is confirmed fully running. Your only job right now is: **import → configure → run → verify → report.**

@@ -1,0 +1,195 @@
+# PHASE 3 — TG's Restaurant ERP: Structural Rebuild
+### Multi-Portal Real-Time Order Workflow, Odoo-Inspired Power Features & Cinematic Final Build
+### (ቲጂ ምግብ ቤት — Replit Agent Brief)
+
+This replaces the current single-app shell with a properly separated, real-time, role-driven system, and layers in several proven enterprise-software patterns (inspired by Odoo ERP's UX, not its code) to make the system feel genuinely powerful. Read this fully before writing code — the architecture changes first, then every module gets rebuilt on top of it, then the power features get layered in.
+
+---
+
+## 0. WHY THIS REBUILD IS HAPPENING
+
+The current build (`TG-Enterprise-Suite`) is one shared React SPA with all role pages (`kitchen.tsx`, `deliveries.tsx`, `orders.tsx`, etc.) sitting inside the same dashboard shell, all reading from the same tables with no real-time push layer — **no WebSocket/Socket.IO implementation exists anywhere in the codebase currently.** That's the root cause of everything feeling disconnected: a chef marking an order "ready" doesn't *notify* a delivery rider, it just changes a row that the rider's screen might show next time it refreshes. The `orders` table also has no concept of *who relayed the order* (a rider entering it from WhatsApp vs. a customer ordering on the webapp) or a *chef-acceptance step* — both of which are central to the real workflow being described below. This phase fixes the architecture at the root, not just the UI on top of it.
+
+**Important note on the Odoo-inspired additions below (Section 9):** these are independently-built features modeled on well-known ERP UX *patterns* (activity timelines, kanban boards, automated reorder rules, consolidated reporting, scheduled tasks) — common, non-proprietary concepts found across many ERP systems. Do not copy any Odoo source code, UI assets, icons, or branded visual design. Everything must be built fresh in this project's own stack and visual identity.
+
+---
+
+## 1. THE REAL-WORLD WORKFLOW THIS SYSTEM MUST MIRROR EXACTLY
+
+There are **two entry points** into the same central order pipeline. Build the system so both converge into one unified, correctly-coded order stream — no mismatched or duplicate codes, no ambiguity about which order came from where.
+
+### Path A — WhatsApp Order (relayed by Delivery Staff)
+1. A customer messages the restaurant's WhatsApp number directly (this stays on personal/business WhatsApp — it is NOT being replaced, it's being *bridged*).
+2. A **Delivery Staff member** sees the WhatsApp order, and opens their own dedicated **Deliveryman Portal**.
+3. In the Deliveryman Portal, they fill a simple **"Relay Order"** form: customer name, phone number, delivery location/address, and select the food items + quantities from the live menu.
+4. On submit, the system **auto-generates a unique Order Code**, creates the order with `channel = "whatsapp_relay"` and `relayed_by = [that delivery staff's user_id]`, and the order appears **instantly** (via WebSocket) on the **Chef Portal** with status `pending_acceptance`.
+5. The Chef **accepts** the order in their portal (one tap) → status becomes `preparing` → this is visible system-wide (Admin Command Center, and back to the relaying delivery staff member's own portal) in real time.
+6. Chef prepares and packs the food, then taps **"Ready"** on that specific order (matched precisely by Order Code — never ambiguous, never mismatched with another order).
+7. The moment "Ready" is tapped, the system pushes a **real-time notification** (WebSocket push + sound/visual alert, and ideally also a mobile push notification if the Deliveryman Portal is installed as a PWA) to **the specific delivery staff member who relayed that order**, containing: Order Code, customer name, phone number, delivery location — everything needed to go pick it up immediately, no re-asking, no re-checking WhatsApp.
+8. Delivery staff picks up, delivers, and confirms **"Delivered"** (or "Failed") in their portal — this closes the loop, updates Finance, and logs their commission.
+
+### Path B — Customer Webapp Order (direct)
+1. A customer goes to the public ordering mini-webapp, enters their **name, phone number, delivery location**, and selects food items + quantities from the live (admin-managed) menu — same data shape as Path A, just entered by the customer themselves instead of relayed by a rider.
+2. On submit, the system auto-generates a unique Order Code, creates the order with `channel = "webapp"`, and it appears instantly on the **Chef Portal** with status `pending_acceptance` — exactly like a relayed WhatsApp order, same queue, same treatment.
+3. Chef accepts → prepares → taps **Ready**, exactly as in Path A.
+4. Because this order has no specific "relaying" delivery staff member attached, on "Ready" the system pushes the real-time notification to the **delivery queue/pool** (visible to all available delivery staff, or auto-assigned to the next available rider per branch — admin-configurable rule), containing the same full detail: Order Code, customer name, phone, location.
+5. Whichever rider picks it up taps **"Picked Up"** (claiming it, removing it from the shared pool) → delivers → confirms **"Delivered"/"Failed"**, same closing flow as Path A.
+
+### Critical Rule — Code Integrity Across Both Paths
+Both paths must draw from **one single sequential/unique Order Code generator** at the database level (e.g., a Postgres sequence or a well-locked generation function) so there is never a collision or duplicate between a relayed WhatsApp order and a direct webapp order, even if both are created in the same second. Every downstream action (chef accept, ready, pickup, delivered) must reference the order strictly by its internal `order_id` (with the human-readable Order Code displayed everywhere), never by loosely matching name/phone, to guarantee zero misassignment.
+
+---
+
+## 2. NEW ARCHITECTURE — SEPARATE PORTALS, ONE BACKEND
+
+Rebuild the frontend as **distinct, purpose-built applications/portals**, all served from the same backend/database, each with its own focused, role-optimized UI — not shared pages inside one generic dashboard shell.
+
+| Portal | Used by | Core purpose |
+|---|---|---|
+| **Admin / Manager Command Center** | Super Admin, Branch Manager | Full system: all modules from Phase 1 & 2, plus live oversight of the entire order pipeline below |
+| **Chef Portal** | Kitchen staff | Dedicated, large-touch-target, tablet-optimized real-time order queue: Accept → Preparing → Ready. Nothing else visible — no financials, no other staff data |
+| **Deliveryman Portal** | Delivery staff | Two real-time views: (1) "Relay an Order" form for WhatsApp orders, (2) live "My Deliveries" queue showing Ready orders assigned/claimable to them, with Picked Up / Delivered / Failed actions |
+| **Customer Ordering Webapp** | Public customers | Public menu browsing + direct ordering (Path B) + live order tracking by Order Code |
+
+**Implementation approach:** these can be separate routed sections within the same frontend build (e.g., `/admin/*`, `/kitchen/*`, `/delivery/*`, `/order/*`) sharing a component library and the same auth/API backend — they do **not** need to be fully separate deployed repos, but they must be **visually and functionally distinct experiences**, each loading only the UI and data relevant to that role, each with its own focused navigation (not the same sidebar with hidden items). Login should route each role straight to their own portal automatically based on their account role — a chef never sees the admin shell at all, even briefly.
+
+**Real-time layer (mandatory, currently missing):** Implement Socket.IO (or native WebSocket) server-side, with rooms/channels per branch and per role (e.g., `branch:1:kitchen`, `branch:1:delivery`, `branch:1:admin`). Every state-changing action emits an event to the relevant room(s) instantly. No portal should ever need to poll or manually refresh to see a new order, an acceptance, or a "ready" notification.
+
+---
+
+## 3. DATABASE / SCHEMA CHANGES REQUIRED
+
+Update the `orders` table and related schema to properly support this workflow (current schema is missing these distinctions):
+
+- `orders.channel` → expand allowed values: `"whatsapp_relay"`, `"webapp"` (replace the generic `"manual"` default).
+- `orders.relayed_by_user_id` → nullable FK to `users.id` — set only for `whatsapp_relay` orders, identifying which delivery staff member relayed it.
+- `orders.status` → expand the state machine to explicitly include: `pending_acceptance` → `preparing` → `ready` → `assigned`/`claimed` → `out_for_delivery` → `delivered` / `failed`. (Current schema only has a generic `status` text field defaulting to `"pending"` — formalize this as a proper enum with validated transitions, and reject any transition that skips steps out of order.)
+- `orders.accepted_by_user_id` and `orders.accepted_at` — capture which chef accepted and when.
+- `orders.assigned_delivery_user_id` and `orders.claimed_at` — capture which delivery staff ultimately picked it up (relevant for Path B's shared pool).
+- Customer fields (`name`, `phone`, `location`) should be captured directly on the order (or linked customer record) at creation time for **both** paths identically, so the data shape is consistent regardless of entry point.
+- `order_status_history` table (already exists) must log every one of the above transitions with `changed_by` and `changed_at` — this becomes the audit trail proving the real-time flow actually happened in the correct order, viewable by Super Admin per order, and is also the data source for the Activity Timeline feature in Section 9.1.
+
+---
+
+## 4. CHEF PORTAL — DETAILED BUILD SPEC
+
+- Default landing view: a **live queue** of all orders in `pending_acceptance` and `preparing` status for their branch, sorted oldest-first, large Order Code display, item list, quantities, and a clear origin tag (e.g., a small "WhatsApp" or "Web Order" badge so the chef has context, though the workflow is identical either way).
+- **Accept** button on each new order — single tap, immediately removes it from "incoming" and moves to "in progress," timestamps `accepted_at`, broadcasts the update.
+- **Ready** button — single tap, precisely tied to that order's `order_id`, timestamps and broadcasts instantly to the correct delivery destination per the rules in Section 1 (specific rider for relayed orders, shared pool for webapp orders).
+- Elapsed-time indicator per ticket, color-escalating the longer it sits unaccepted or unprepared (this was speced in Phase 2 — confirm it's real here, tied to actual timestamps).
+- Sound + visual pulse on every new incoming order — chef must never have to be staring at the screen to notice a new order arrived.
+- Optional "86/unavailable" toggle on a menu item directly from this portal for the shift (instantly reflects on both ordering paths).
+
+---
+
+## 5. DELIVERYMAN PORTAL — DETAILED BUILD SPEC
+
+**Tab 1 — Relay Order (for WhatsApp orders):**
+- Simple, fast form: Customer Name, Phone Number, Delivery Location (text + optional map pin), then a menu picker (categorized, searchable) to add items + quantities, running total in AED.
+- Submit → instantly creates the order, shows the rider their generated Order Code as confirmation, and the order disappears from their "to relay" attention and reappears later in their "My Deliveries" tab once the chef marks it ready.
+
+**Tab 2 — My Deliveries (live queue):**
+- For orders they personally relayed: shows up here automatically the instant the chef taps Ready — no claiming needed, it's already theirs.
+- For webapp-originated orders in the shared pool: shows a "Ready for Pickup — Unclaimed" section visible to all delivery staff on that branch; tapping **"Claim"** assigns it to them (`assigned_delivery_user_id`) and removes it from others' pool view in real time (first to claim gets it — handle this as an atomic DB operation to prevent two riders claiming the same order simultaneously).
+- Each claimed/assigned order shows full detail clearly: Order Code, customer name, phone (tap to call), location (tap to open in maps), items.
+- **Picked Up** → **Delivered** / **Failed** buttons, with optional cash-collected amount field on Delivered, timestamps everything, broadcasts to Admin Command Center instantly, and logs commission per Phase 2 payroll rules.
+- A simple personal stats footer: today's completed deliveries, today's commission earned — real numbers, not static.
+
+---
+
+## 6. CUSTOMER WEBAPP — REBUILD TO MATCH PATH B EXACTLY
+
+- Public landing: live, admin-managed menu (categories, photos, prices, bilingual EN/AM, real-time availability/86 status).
+- Ordering flow: customer enters Name, Phone, Delivery Location, builds their cart, reviews total, submits.
+- On submit: real Order Code generated and shown immediately, with a live-updating tracker (`/track/:code`) showing the exact same status progression as the internal system (Pending → Preparing → Ready → Picked Up → Out for Delivery → Delivered) updating in real time via the same WebSocket layer (a public-safe, read-only channel scoped to that one order code).
+- No login required for ordering, but the phone number becomes the lookup key for the lottery ticket system and order history (Phase 2 spec still applies here).
+
+---
+
+## 7. ADMIN / MANAGER COMMAND CENTER — UPDATED FOR FULL PIPELINE VISIBILITY
+
+On top of everything specified in Phase 1 & 2, the live operations view must now show the **entire Path A / Path B pipeline simultaneously and explicitly**, including:
+- A real-time visual flow of every active order's current stage (received → accepted → preparing → ready → claimed/assigned → out for delivery → delivered), filterable by branch.
+- Clear visibility into **which delivery staff member relayed or claimed each order** — this is core to commission accuracy and accountability.
+- Alerts for orders stuck too long in any stage (e.g., accepted but not marked ready within X minutes, or ready but unclaimed for X minutes) — configurable thresholds, real notifications, not decorative.
+- Full per-order audit trail drill-down (using `order_status_history`) — who did what and when, for any order, ever.
+
+---
+
+## 8. CARRY FORWARD FROM PHASE 2 (do not lose any of this in the rebuild)
+
+Everything specified in the Phase 2 brief still applies and must be real, not simulated, in this rebuilt architecture:
+- Real CRUD everywhere (Menu, Inventory, Staff, Branches, Finance, Payroll) — no fake/local-only state.
+- WhatsApp/Twilio Settings admin panel with masked credentials and a working test-connection button.
+- Lottery engine: real ticket generation from completed orders, real draw mechanism, real WhatsApp winner notifications via Twilio.
+- Bulk Marketing Engine: real segmented, schedulable WhatsApp/SMS/Email campaigns via Twilio/SendGrid.
+- Worker registration with real account creation and credential delivery via SMS.
+- Inventory auto-decrement tied to recipes, low-stock alerts, waste logging.
+- Full responsiveness across every portal (the Chef and Deliveryman portals especially must be flawless on phone/tablet — that's their real daily-use device).
+- The cinematic dark amber/gold-on-charcoal visual identity, glassmorphism depth, micro-animations, and TG's Restaurant branding — applied consistently across **all four portals now**, not just the admin dashboard. Each portal should feel like part of the same premium product family while being laid out distinctly for its role (e.g., Chef Portal = big bold ticket cards; Deliveryman Portal = clean mobile-first action list; Customer Webapp = polished consumer-grade ordering experience).
+
+---
+
+## 9. ODOO-INSPIRED POWER FEATURES (NEW)
+
+These are proven enterprise-ERP UX patterns, rebuilt independently in this system's own stack and cinematic visual identity. None of this is copied from Odoo or any other product — these are common, well-understood ERP concepts being implemented fresh for TG's Restaurant.
+
+### 9.1 Activity Timeline ("Chatter") on Every Record
+Instead of burying status history in a hidden admin table, surface it as a visible, scrollable timeline directly on the detail view of key records — Orders, Staff profiles, and Expenses to start.
+- On an **Order Detail** view (used by Admin and, in a simplified read-only form, visible to the relaying delivery staff), show a vertical timeline: "Order created via WhatsApp relay by [Rider Name] — 6:42 PM," "Accepted by Chef [Name] — 6:43 PM," "Marked Ready — 6:58 PM," "Picked up by [Rider Name] — 7:01 PM," "Delivered — 7:14 PM" — each entry timestamped and attributed to a real user, generated automatically from `order_status_history`.
+- Add the ability for Admin/Manager to post an **internal note** on any order or staff record (e.g., "customer called about a missing item — refunded 15 AED") — stored as a `record_notes` table (`id`, `entity_type`, `entity_id`, `author_id`, `note`, `created_at`) and shown inline in the same timeline, visually distinguished from automated system events.
+- This becomes the single source of truth for "what happened and who did it" on any record — directly supports the audit requirements from Phase 1 & 2 but in a much more usable, visible form than a separate buried log page.
+
+### 9.2 Kanban Dispatch Board (Delivery & Prep Visualization)
+In addition to the live-queue list views already specced for the Chef and Deliveryman portals, add a **drag-and-drop kanban board view** on the Admin/Manager Command Center for visualizing the delivery pipeline at a glance:
+- Columns: **Ready for Pickup → Assigned → Out for Delivery → Delivered** (and a side column for **Failed**).
+- Each order appears as a card (Order Code, customer name, assigned rider avatar/initials, elapsed time badge) and can be dragged between columns by a manager when needed (e.g., manually reassigning a stuck order) — drag action triggers the same real backend status-update + WebSocket broadcast as the portal buttons, never a local-only UI move.
+- This is a **manager oversight/visualization tool**, not a replacement for the Chef/Deliveryman portals' own simpler tap-based flows — those stay as specced in Sections 4–5.
+- Optionally extend the same kanban pattern to a **Kitchen Prep Board** view (Pending Acceptance → Preparing → Ready) as an alternate visualization style for managers who prefer it over the list view.
+
+### 9.3 Automated Inventory Reorder Rules
+Extend the Phase 2 low-stock alert system into a real automated reordering workflow:
+- Each `inventory_items` row gets an optional **reorder rule**: `reorder_threshold`, `reorder_quantity`, and a linked `preferred_supplier_id`.
+- When stock drops at or below the threshold (triggered by the same order-completion stock-decrement logic from Phase 2), the system automatically generates a **draft Purchase/Restock Order** (new table: `restock_orders` — `id`, `branch_id`, `ingredient_id`, `quantity`, `supplier_id`, `status` [`draft`/`approved`/`received`], `created_at`) rather than just firing a one-off alert.
+- These draft restock orders appear in a new **Inventory → Restock Requests** admin view, where the manager reviews and taps **Approve** (status → `approved`) and later **Mark Received** (status → `received`, which then increments `quantity_on_hand` back up) — turning "we're low on injera flour" into a one-tap action instead of a manual reorder from scratch.
+- Suppliers get a simple `suppliers` table (`id`, `name`, `phone`, `contact_email`, `branch_id`) manageable from an admin settings page, so the restock draft can reference real contact info for follow-up (calling/WhatsApping the supplier remains manual for now — full supplier-side automation is out of scope for this phase).
+
+### 9.4 Multi-Branch Consolidated Reporting View
+Formalize the "All Branches vs. one specific branch" pattern consistently across Finance and the main Dashboard (already partially implied in Phase 1, now made explicit and mandatory):
+- A persistent **branch selector** control (visible only to Super Admin) at the top of the Dashboard and Finance pages: "All Branches (Consolidated)" or a specific branch name.
+- "All Branches" view shows true aggregated totals (sum of revenue/expenses/orders across every branch) AND a **per-branch comparison table/chart** below it (e.g., bar chart comparing today's revenue branch-by-branch) — not just a flat combined number with no breakdown.
+- Selecting a specific branch instantly re-renders every chart/number/table on that page scoped to just that branch — same component, scoped query, no separate pages to maintain.
+- Branch Managers never see this selector at all — their view is permanently scoped server-side to their own `branch_id`, consistent with the RBAC rules already established.
+
+### 9.5 Scheduled Activities / Staff Task Reminders
+A lightweight internal task-assignment tool so small follow-ups don't get lost in WhatsApp chats:
+- New `staff_activities` table: `id`, `assigned_to_user_id`, `assigned_by_user_id`, `branch_id`, `title`, `due_date`, `status` [`pending`/`done`], `related_entity_type`/`related_entity_id` (optional link back to an order, expense, or staff record), `created_at`.
+- Manager/Admin can assign a quick task to any staff member from anywhere in the system (e.g., directly from an order's detail view: "Follow up with this customer about their complaint," due today) — a small "+ Add Task" action available contextually.
+- Each staff member's portal (Chef, Deliveryman, or Admin) shows a small **"My Tasks"** widget/badge listing their pending activities, with a one-tap **Mark Done**.
+- Admin Command Center gets an **"All Pending Activities"** view across the branch/all branches, so nothing assigned ever silently disappears.
+
+---
+
+## 10. FINAL VERIFICATION CHECKLIST
+
+- [ ] A WhatsApp-relayed order, entered by a delivery staff member, appears instantly on the Chef Portal with zero refresh needed.
+- [ ] Chef accepting an order updates status in real time, visible on Admin Command Center.
+- [ ] Chef tapping "Ready" instantly notifies the *correct, specific* delivery staff member (for relayed orders) with full customer detail, with no manual lookup needed.
+- [ ] A webapp-direct order behaves identically through Chef accept/ready, then surfaces in the *shared* delivery pool, correctly claimable by any available rider with no double-claim race condition.
+- [ ] Order Codes are never duplicated or mismatched between the two paths, even under simultaneous submission.
+- [ ] Every status transition is timestamped and attributed to a real user in `order_status_history`, viewable in an audit drill-down AND in the new Activity Timeline view.
+- [ ] Each of the four portals (Admin, Chef, Delivery, Customer) is a distinct, role-optimized experience — not the same shell with hidden menu items.
+- [ ] All real-time updates happen via WebSocket push — no portal relies on manual refresh or polling to reflect a new state.
+- [ ] All Phase 2 functional requirements (real CRUD, Twilio settings, lottery, marketing, payroll, inventory) are confirmed working inside this rebuilt architecture, not regressed.
+- [ ] The Activity Timeline on Order Detail views correctly renders real, attributed, timestamped events — not a static mockup.
+- [ ] The Kanban Dispatch Board lets a manager drag a card and have it perform a real status update + WebSocket broadcast, identical in effect to the portal buttons.
+- [ ] Low stock on a real ingredient correctly auto-generates a draft Restock Order, approvable and markable-received from the Inventory admin view.
+- [ ] The branch selector on Dashboard/Finance correctly toggles between true consolidated totals (with per-branch breakdown) and single-branch scoped views.
+- [ ] A task assigned to a staff member appears in their portal's "My Tasks" widget and can be marked done.
+- [ ] Visual design is cinematic, consistent, and on-brand across all four portals and the new Odoo-inspired views, fully responsive on every target device for that role.
+
+---
+
+## 11. FINAL INSTRUCTION TO REPLIT AGENT
+
+This is a structural rebuild, not a cosmetic patch — start by implementing the WebSocket/real-time layer and the expanded order state machine described in Sections 2–3, since every portal in Sections 4–6 depends on that foundation. Build and test Path A (WhatsApp relay → chef → specific rider) completely end-to-end first, confirm it works with real data and real real-time pushes, then build Path B (webapp → chef → delivery pool) reusing the same pipeline. Once both core paths are verified working, layer in the Odoo-inspired power features from Section 9 — the Activity Timeline first (it reuses data you already have), then the Kanban Dispatch Board, then Inventory Reorder Rules, Multi-Branch Consolidated Reporting, and Scheduled Activities, in that order of priority. Only after all of this is functionally verified should the final cinematic styling pass be applied across all four portals and the new views. Do not consider any portal or feature complete until you have personally tested its full real-time/functional loop — for the order pipeline specifically, test between at least two simulated concurrent users (e.g., one browser as Chef, one as Deliveryman) and confirm the notification arrives instantly without a refresh. Build everything as original code in this project's own stack and visual identity — do not import or reference any third-party ERP source code or branded assets.

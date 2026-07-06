@@ -1,0 +1,186 @@
+# PHASE 2 — TG's Restaurant ERP: Make Everything Real, Connected & Cinematic
+### (ቲጂ ምግብ ቤት — Follow-up Build Brief for Replit Agent)
+
+Copy this into Replit AI as the next instruction. Read it fully before touching code — the priority is **fixing what's fake before adding what's new.**
+
+---
+
+## 0. CONTEXT — WHAT'S WRONG RIGHT NOW
+
+The current build looks complete but is **frontend simulation only** in most modules. Buttons render, forms render, status badges render — but Create/Update/Delete actions are not actually persisting to PostgreSQL, or the pages were never wired to the API at all. This phase is about closing that gap module-by-module, with zero tolerance for fake/mock state. Every single button, form, and toggle in this system must perform a real database mutation through the Express API and reflect the new state after a refresh — not just optimistic UI that resets on reload.
+
+**Before writing any new feature code, run a full audit:** go through every page, every button, every form, and verify whether it calls a real API endpoint or just updates local React state. Produce a checklist of what's fake vs. real, fix every fake one first, THEN build the new features below.
+
+---
+
+## 1. GLOBAL RULE — NO SIMULATED ACTIONS ANYWHERE
+
+For every module (Orders, Menu, Inventory, Staff, Branches, Payroll, Lottery, Deliveries, Finance):
+
+- **Create** → real `POST` request → inserts row in PostgreSQL → returns the created record → frontend updates from the real server response (not a locally-constructed fake object).
+- **Read/List** → real `GET` request on page load and after every mutation — no stale cached arrays.
+- **Update/Edit** → real `PUT`/`PATCH` request → updates the actual row → UI reflects confirmed server state.
+- **Delete** → real `DELETE` request with a confirmation modal → row removed (or soft-deleted with `active = false` flag, recommended for audit trail) → list re-fetches.
+- Every mutation must show: a loading state while in flight, a success toast/notification on completion, and a clear error toast if the request fails (network error, validation error, permission error) — **never fail silently**.
+- Every form must have real client-side validation AND real server-side validation (Zod/Joi) — reject bad data with a clear message, don't just accept anything.
+- After this phase, I should be able to refresh any page, restart the server, or open the app on a different device/browser and see the exact same data — proof it's actually in the database, not in component state.
+
+---
+
+## 2. MODULE-BY-MODULE FIX LIST
+
+### 2.1 Orders
+- Confirm full CRUD: manually creating an order from the admin/staff side actually inserts into `orders` + `order_items`, generates a real unique Order Code, and is immediately visible on KDS and Delivery views via WebSocket — test this live, not just visually.
+- Order status transitions (received → preparing → ready → out for delivery → delivered) must update `order_status_history` and broadcast via WebSocket to all relevant connected clients in real time.
+- Editing an order (e.g., correcting an item/quantity before kitchen starts) must be a real update, blocked once status passes "preparing" (configurable).
+
+### 2.2 Kitchen Display System (KDS)
+- "Start Preparing" / "Mark Ready" buttons must perform real status updates, not just move a card visually.
+- Add a **real-time elapsed timer** per ticket (calculated from `created_at`, not a fake countdown).
+- Add **sound + visual pulse alert** on genuinely new incoming orders (triggered by the WebSocket event, not a timer).
+- Add a **"Bump/Recall"** feature — a completed ticket can be recalled if marked ready by mistake.
+
+### 2.3 Deliveries
+- Real assignment system: manager/admin can assign an order to a specific delivery staff member from a live dropdown of available riders — this writes to the `deliveries` table.
+- Delivery staff's own view must pull only their real assigned queue from the database (filtered server-side by their `user_id`, not hidden by frontend).
+- "Picked Up" / "Delivered" / "Failed" buttons must write real timestamps and status to `deliveries`, and immediately reflect on the Admin Follow-Up dashboard via WebSocket.
+- Add **cash collection confirmation** field (amount collected) on delivery completion, feeding into Finance.
+- Add a simple delivery performance view: real average delivery time per rider, computed from actual timestamp data.
+
+### 2.4 Menu Management
+- Full real CRUD for categories and items: add/edit/delete a menu item must actually change what appears on the **public customer-facing menu** (`/menu-public`) and ordering page immediately — this is the proof it's wired correctly.
+- Image upload for menu items must actually upload to object storage and persist the URL — not a placeholder.
+- Bilingual fields (English/Amharic) must both save and both display correctly depending on language toggle.
+- "Out of stock" / "available" toggle must be a real instant-acting flag that hides the item from the customer ordering page immediately.
+
+### 2.5 Inventory
+- Real CRUD for ingredients/stock items (add new ingredient, edit quantity/unit/reorder threshold, delete).
+- Recipe linkage: completing an order must actually decrement linked ingredient stock quantities in the database — test by completing an order and confirming stock drops.
+- Real low-stock alert: when `quantity_on_hand` drops below `reorder_threshold`, push a real notification to the manager dashboard (not a static demo banner).
+- Waste logging form must really insert into `waste_logs` and factor into expense/profit calculations.
+
+### 2.6 Finance
+- All figures shown (revenue, expenses, P&L) must be calculated live from real `orders`, `expenses`, and `payroll` data — not hardcoded demo numbers.
+- Real expense entry form (add/edit/delete an expense line) feeding directly into the P&L calculation.
+- Date-range filtering must re-query and recalculate, not just filter a static array.
+- Add real PDF/Excel export of financial reports for a selected date range.
+
+### 2.7 Payroll
+- Build the actual **Work Time Calculator**: real clock-in/clock-out entries (manual entry by admin for now is fine) stored in `timesheets`, with hours auto-computed from real timestamps.
+- Build the actual **Salary Calculator**: base salary (from staff profile) + real accumulated commission (auto-logged per completed order tied to that staff member) + overtime − deductions = net pay, calculated from real data, not a fixed demo figure.
+- Commission must auto-accrue in the database the moment a delivery is marked "Delivered" or a kitchen order is marked complete (whichever role-commission rule applies) — verify by completing an order and watching the commission balance increase.
+- Generate a real downloadable PDF payslip per staff member per pay period.
+- Add a payroll history table — real archive, filterable by staff/month/branch.
+
+### 2.8 Lottery — currently empty, needs full build
+- Build a real **ticket-number generation engine**: every qualifying order (admin-configurable rule, e.g. "every order over X AED" or "every order today") generates a real digital ticket number stored in `lottery_entries`, tied to the customer.
+- Build an admin "Run Draw" screen: select a draw pool (date range/branch), set number of winners and prizes, and execute a real random selection from the actual entries in the database — store the result (winning ticket numbers, timestamp, seed) in `lottery_draws` / `lottery_winners` for auditability.
+- **Winner notification via WhatsApp:** on draw completion, automatically send a real WhatsApp message (via the Twilio/WhatsApp integration — see Section 3) to each winner's stored phone number, congratulating them and stating their prize. This must actually send, not just log "would have sent."
+- Build a public results page (`/lottery-results` or similar) showing real past draws and winning numbers, pulled from the database.
+- Add a "My Tickets" lookup for customers (enter phone number, see their ticket numbers and any wins) on the public side.
+
+### 2.9 Staff / Worker Registration
+- Build a real **Add New Staff / Worker Registration** form (currently missing): name, phone, email, role, branch assignment, base salary, commission rate, start date, profile photo upload — submitting this must create a real `users` row with a securely hashed temporary password, and ideally trigger a real welcome SMS via Twilio with their login credentials.
+- Edit staff: update any of the above fields, including reassigning branch or role — real update.
+- Deactivate/delete staff: soft-delete (`active = false`) so they're removed from login access and active staff lists but their historical order/payroll/commission data is preserved for records.
+- Staff list page should show real status (active/inactive), role, branch, and link through to their real payroll/commission history.
+
+### 2.10 Branches
+- Real CRUD: add a new branch (name, address, phone) should actually make it selectable everywhere branch_id is used system-wide (staff assignment, menu, inventory, orders) without any code changes — this proves the architecture is properly centralized as specified.
+- Branch detail view should show real live stats for that branch only (today's orders, revenue, active staff).
+
+---
+
+## 3. WHATSAPP → ERP DISPLAY (Critical Missing Piece)
+
+This is the heart of the system and currently has no visible implementation. Build it properly:
+
+### 3.1 Admin Settings Panel — WhatsApp/Twilio Integration
+Build a new **Settings → Integrations** page (Super Admin only) where Twilio credentials and WhatsApp configuration are managed through the UI, not hardcoded:
+- Fields: Twilio Account SID, Auth Token, WhatsApp Business Number, SendGrid API Key — stored encrypted in the database (or securely in environment config, with the admin panel only showing masked values and a "test connection" button).
+- A **"Test Connection"** button that sends a real test message to a provided number and confirms success/failure live.
+- A toggle to enable/disable the WhatsApp bridge and the marketing engine independently.
+- Webhook URL display (the URL Twilio/Meta needs to be configured with) clearly shown for setup reference.
+
+### 3.2 Incoming Order Bridge
+- Set up a real webhook endpoint (e.g., `/api/webhooks/whatsapp`) that receives incoming WhatsApp messages from Twilio's WhatsApp API.
+- Build a **"WhatsApp Order Queue"** page in the ERP (new sidebar item) showing every incoming WhatsApp message in real time as it arrives — sender's name/number, message content/catalogue order, timestamp.
+- Staff can view the raw incoming message and, with one click, **convert it into a structured Order** (select items from the menu matching what the customer asked for, confirm quantities) — this creates a real `orders` record linked to that WhatsApp conversation, and the order then flows through the normal Orders → KDS → Delivery pipeline exactly like a webapp order.
+- Once converted, auto-send a real WhatsApp reply to the customer confirming their Order Code and status — via the Twilio integration configured in 3.1.
+- As order status changes (ready, out for delivery, delivered), optionally auto-send real WhatsApp status update messages back to that customer (toggleable per order or globally in settings).
+- Log every WhatsApp interaction in a `whatsapp_messages` table for the Unified Messaging Hub history.
+
+---
+
+## 4. CUSTOMER ORDERING MINI-WEBAPP — BACKEND-MANAGED, NOT STATIC
+
+The current `/menu-public` and ordering flow needs to be confirmed as truly dynamic:
+- Every menu item, category, price, and availability shown to the public **must be pulled live from the database** — proof test: change a price or mark an item out-of-stock in the admin Menu module, then refresh the public page and confirm it updates instantly, with zero code redeploy.
+- Customer places an order on the public page → this creates a real `orders` row (channel = "webapp") → instantly appears on KDS/Admin dashboard via WebSocket, exactly like a WhatsApp order.
+- Customer gets a real, working `/track/:code` page pulling live order status — confirm this updates in real time as kitchen/delivery status changes, not just on page load.
+- Add cart persistence (so refreshing the ordering page doesn't lose their selections) and basic order confirmation screen with their generated Order Code.
+
+---
+
+## 5. DIGITAL MARKETING / BULK MESSAGING ENGINE — BUILD FROM SCRATCH
+
+Currently missing entirely. Build:
+- New **Marketing** page (admin/manager access): compose a message, select channel (WhatsApp / SMS / Email), and select a customer **segment** — segments should be real, computed from actual order history in the database (e.g., "Ordered in last 7 days," "Inactive 30+ days," "Top 10% spenders," "All customers in Branch X").
+- **Schedule** a campaign for a future date/time (stored in `marketing_campaigns`, executed by a real cron job — node-cron — that fires at the scheduled time and actually sends via Twilio/SendGrid).
+- Campaign history view showing real sent count, channel, segment targeted, and timestamp — pulled from actual send logs, not estimated numbers.
+- Respect opt-outs: add a simple `marketing_opt_out` flag on the customer record and never send to opted-out customers.
+
+---
+
+## 6. RESPONSIVENESS — FULL PASS ON EVERY PAGE
+
+Audit and fix every single page (all 15+) for proper responsive behavior:
+- Mobile (< 640px), tablet (640–1024px), and desktop (1024px+) breakpoints all tested and clean — no horizontal scroll, no overlapping elements, no cut-off buttons.
+- KDS and Delivery views specifically need to be flawless on tablet/phone since that's their real-world usage device.
+- Tables (Orders, Inventory, Staff, Payroll) should collapse into card-based layouts on mobile rather than squeezing a wide table — this is a common failure point, fix it explicitly.
+- Sidebar navigation should collapse into a clean mobile drawer/hamburger menu below desktop width.
+- Forms and modals must be fully usable on mobile (no fields cut off, no unreachable submit buttons under the keyboard).
+
+---
+
+## 7. CINEMATIC STYLING PASS
+
+Take the current dark amber/gold-on-charcoal foundation and elevate it:
+- Add subtle **glassmorphism/depth** on cards and panels (soft shadows, slight blur on modals/overlays) rather than flat dark blocks.
+- Add **micro-animations**: page transitions, button hover/press states, number count-up animations on dashboard stats, smooth status-change transitions on order cards (not instant snap).
+- KDS new-order arrival should feel alive: a subtle slide-in + glow pulse + (optional) chime sound.
+- Add a refined loading state system — skeleton loaders instead of blank screens or spinners everywhere, matching the dark theme.
+- Strengthen the logo/branding presence: animated/subtle logo treatment on the login screen, consistent favicon, branded loading screen on initial app load.
+- Establish a clear, consistent type scale and spacing system across all pages (this is often where AI-generated UIs look inconsistent page-to-page) — audit for this specifically and unify it.
+- Ethiopian-inspired accent detailing (subtle pattern/texture elements, gold accent borders on key action buttons) without overdoing it — premium restaurant tech, not a children's app.
+
+---
+
+## 8. KITCHEN MANAGEMENT — ADDITIONAL FEATURES
+
+Beyond basic KDS, add:
+- **Prep time analytics**: real average prep time per item/category, computed from actual order timestamp data, surfaced to the manager dashboard.
+- **Item-level "86" toggle** directly from the kitchen screen (mark an item temporarily unavailable mid-shift) — instantly reflects on customer ordering page and WhatsApp catalogue reference.
+- **Multi-station view** (optional, if relevant to their kitchen): ability to filter/group tickets by prep station if the menu has distinct sections (grill, injera station, etc.) — admin-configurable.
+
+---
+
+## 9. FINAL VERIFICATION CHECKLIST (Replit Agent should confirm each before calling this done)
+
+- [ ] Every Create/Edit/Delete button across all 15+ pages performs a real, persisted database action.
+- [ ] Refreshing the browser or restarting the server never loses data that was "added" through the UI.
+- [ ] WhatsApp messages appear in a real Order Queue and can be converted into real orders.
+- [ ] Twilio/SendGrid credentials are manageable from an admin Settings page, with a working test-connection button.
+- [ ] Lottery tickets are generated from real orders, draws run on real entries, and winners receive a real WhatsApp message.
+- [ ] Payroll numbers (commission, salary, payslips) are computed from real order/timesheet data, not fixed demo values.
+- [ ] Public menu and ordering page reflect admin Menu changes instantly with no redeploy.
+- [ ] Marketing campaigns can be composed, scheduled, and actually sent via Twilio/SendGrid at the scheduled time.
+- [ ] All pages pass a mobile/tablet/desktop responsiveness check with no layout breakage.
+- [ ] Worker registration creates a real staff account with login access.
+- [ ] Visual styling is consistent, animated, and "cinematic" across every module — not just the dashboard.
+
+---
+
+## 10. FINAL INSTRUCTION TO REPLIT AGENT
+
+Do not report any module as "done" until you have personally tested the full create → refresh → confirm-persisted loop for it. The previous build prioritized visual completeness over functional completeness — this phase reverses that priority. Functionality and real data integrity come first; the cinematic polish is the final 20% layered on top of a system where every single interactive element actually works end-to-end against the real PostgreSQL database and real Twilio/SendGrid integrations.
