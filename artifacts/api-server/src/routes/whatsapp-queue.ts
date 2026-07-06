@@ -3,6 +3,10 @@ import { db, ordersTable, orderStatusHistoryTable, orderItemsTable, whatsappMess
 import { eq, and, sql } from "drizzle-orm";
 import { sendWhatsAppMessage } from "../lib/twilio";
 import { getIO } from "../lib/socket";
+import { authenticate, requireRole, ADMIN_ROLES, ORDER_INTAKE_ROLES } from "../middlewares/auth";
+
+// Roles that may read and act on the WhatsApp intake queue
+const QUEUE_ROLES = [...ADMIN_ROLES, ...ORDER_INTAKE_ROLES];
 
 const router = Router();
 
@@ -82,7 +86,7 @@ router.post("/webhooks/whatsapp", async (req, res): Promise<void> => {
 });
 
 // GET queue orders
-router.get("/whatsapp/queue", async (req, res): Promise<void> => {
+router.get("/whatsapp/queue", authenticate, requireRole(...QUEUE_ROLES), async (req, res): Promise<void> => {
   const branchId = req.query.branchId ? parseInt(req.query.branchId as string, 10) : undefined;
   let rows = await db.select().from(ordersTable).where(eq(ordersTable.status, "queue")).orderBy(ordersTable.createdAt);
   if (branchId) rows = rows.filter(o => o.branchId === branchId);
@@ -90,7 +94,7 @@ router.get("/whatsapp/queue", async (req, res): Promise<void> => {
 });
 
 // Claim queue order
-router.post("/whatsapp/queue/:id/claim", async (req, res): Promise<void> => {
+router.post("/whatsapp/queue/:id/claim", authenticate, requireRole(...QUEUE_ROLES), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const { userId } = req.body;
   const [current] = await db.select().from(ordersTable).where(eq(ordersTable.id, id));
@@ -105,7 +109,7 @@ router.post("/whatsapp/queue/:id/claim", async (req, res): Promise<void> => {
 });
 
 // Confirm queue order (transition to pending_acceptance)
-router.post("/whatsapp/queue/:id/confirm", async (req, res): Promise<void> => {
+router.post("/whatsapp/queue/:id/confirm", authenticate, requireRole(...QUEUE_ROLES), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const { userId, customerName, deliveryAddress, items } = req.body;
   if (!items?.length) { res.status(400).json({ error: "Items required" }); return; }
@@ -148,7 +152,7 @@ router.post("/whatsapp/queue/:id/confirm", async (req, res): Promise<void> => {
 });
 
 // Dismiss queue order
-router.post("/whatsapp/queue/:id/dismiss", async (req, res): Promise<void> => {
+router.post("/whatsapp/queue/:id/dismiss", authenticate, requireRole(...QUEUE_ROLES), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const { userId, reason } = req.body;
   if (!reason) { res.status(400).json({ error: "Reason required" }); return; }
@@ -162,11 +166,29 @@ router.post("/whatsapp/queue/:id/dismiss", async (req, res): Promise<void> => {
   res.json({ ok: true });
 });
 
-// Media proxy — streams Twilio voice note audio to the browser (avoids CORS + auth issues)
-router.get("/whatsapp/media", async (req, res): Promise<void> => {
+// Allowlist of hostname suffixes from which we will proxy Twilio media.
+// We intentionally forward Basic auth credentials only to these Twilio-owned domains.
+const TWILIO_MEDIA_HOSTS = [
+  ".twilio.com",
+  ".twiliocdn.com",
+  ".twimg.com", // Twilio WhatsApp profile images
+];
+
+function isTwilioMediaUrl(rawUrl: string): boolean {
+  try {
+    const parsed = new URL(rawUrl);
+    return parsed.protocol === "https:" && TWILIO_MEDIA_HOSTS.some(suffix => parsed.hostname.endsWith(suffix));
+  } catch {
+    return false;
+  }
+}
+
+// Media proxy — streams Twilio voice note audio to the browser (avoids CORS + auth issues).
+// Only proxies URLs on Twilio-owned domains to prevent SSRF and credential leakage.
+router.get("/whatsapp/media", authenticate, requireRole(...QUEUE_ROLES), async (req, res): Promise<void> => {
   const url = req.query.url as string;
-  if (!url || !url.startsWith("https://")) {
-    res.status(400).json({ error: "Invalid url" }); return;
+  if (!url || !isTwilioMediaUrl(url)) {
+    res.status(400).json({ error: "URL must be a Twilio media URL" }); return;
   }
   try {
     const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;

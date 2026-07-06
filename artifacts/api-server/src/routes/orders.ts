@@ -442,8 +442,20 @@ router.post("/delivery/orders/:id/pickup", authenticate, requireRole(...DELIVERY
   const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
   const userId = req.user!.id;
-  const [order] = await db.update(ordersTable).set({ status: "out_for_delivery" }).where(eq(ordersTable.id, id)).returning();
-  if (!order) { res.status(404).json({ error: "Order not found" }); return; }
+  const isAdmin = ADMIN_ROLES.includes(req.user!.role);
+
+  // Ownership check: only the assigned rider (or admin) may mark pickup
+  const [current] = await db.select().from(ordersTable).where(eq(ordersTable.id, id));
+  if (!current) { res.status(404).json({ error: "Order not found" }); return; }
+  if (!isAdmin && current.assignedDeliveryUserId !== userId) {
+    res.status(403).json({ error: "Not your order" }); return;
+  }
+
+  const [order] = await db.update(ordersTable)
+    .set({ status: "out_for_delivery" })
+    .where(and(eq(ordersTable.id, id), eq(ordersTable.status, "assigned")))
+    .returning();
+  if (!order) { res.status(409).json({ error: "Order is not in assigned state" }); return; }
   await db.insert(orderStatusHistoryTable).values({ orderId: order.id, status: "out_for_delivery", changedBy: userId });
   tryEmitTo(`branch:${order.branchId}:admin`, "order:status", { orderId: order.id, status: "out_for_delivery", orderCode: order.orderCode, branchId: order.branchId });
   res.json(await buildOrderResponse(order));
@@ -453,9 +465,21 @@ router.post("/delivery/orders/:id/complete", authenticate, requireRole(...DELIVE
   const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
   const userId = req.user!.id;
+  const isAdmin = ADMIN_ROLES.includes(req.user!.role);
+
+  // Ownership check: only the assigned rider (or admin) may complete/fail
+  const [current] = await db.select().from(ordersTable).where(eq(ordersTable.id, id));
+  if (!current) { res.status(404).json({ error: "Order not found" }); return; }
+  if (!isAdmin && current.assignedDeliveryUserId !== userId) {
+    res.status(403).json({ error: "Not your order" }); return;
+  }
+
   const outcome = req.body.outcome === "failed" ? "failed" : "delivered";
-  const [order] = await db.update(ordersTable).set({ status: outcome }).where(eq(ordersTable.id, id)).returning();
-  if (!order) { res.status(404).json({ error: "Order not found" }); return; }
+  const [order] = await db.update(ordersTable)
+    .set({ status: outcome })
+    .where(and(eq(ordersTable.id, id), eq(ordersTable.status, "out_for_delivery")))
+    .returning();
+  if (!order) { res.status(409).json({ error: "Order is not out for delivery" }); return; }
   await db.insert(orderStatusHistoryTable).values({ orderId: order.id, status: outcome, changedBy: userId });
   // Commission: credit delivery staff when order is successfully delivered
   if (outcome === "delivered") {
