@@ -24,6 +24,7 @@ async function seed() {
     { name: "Solomon Bekele", phone: "+251911001004", role: "delivery_staff", passwordHash: staffHash, branchId: b1.id, baseSalary: "2000", active: true },
     { name: "Hana Girma", phone: "+251911001005", role: "order_staff", passwordHash: staffHash, branchId: b2.id, baseSalary: "2200", active: true },
     { name: "Dawit Tesfaye", phone: "+251911001006", role: "branch_manager", passwordHash: staffHash, branchId: b2.id, baseSalary: "3500", active: true },
+    { name: "Selam Kebede", phone: "+251911001007", role: "addis_staff", passwordHash: staffHash, branchId: null, baseSalary: "2000", active: true },
   ]).onConflictDoNothing();
   console.log("Users seeded");
 

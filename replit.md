@@ -108,6 +108,7 @@ All required secrets are present in Replit Secrets:
 | delivery_staff | +251911001004 | staff123 |
 | order_staff | +251911001005 | staff123 |
 | branch_manager | +251911001006 | staff123 |
+| addis_staff | +251911001007 | staff123 |
 
 ### Workflow
 `TG Restaurant ERP` workflow runs both services in parallel:
