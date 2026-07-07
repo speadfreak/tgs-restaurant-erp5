@@ -14,7 +14,7 @@ if (Number.isNaN(port) || port <= 0) {
 const httpServer = createServer(app);
 initSocket(httpServer);
 
-httpServer.listen(port, (err?: Error) => {
+httpServer.listen(port, "0.0.0.0", (err?: Error) => {
   if (err) {
     logger.error({ err }, "Error listening on port");
     process.exit(1);

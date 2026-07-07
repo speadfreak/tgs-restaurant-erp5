@@ -1,11 +1,18 @@
 import { useEffect, useRef } from "react";
 import { io, Socket } from "socket.io-client";
 
+// In production the frontend (static site) and API live on different domains.
+// VITE_API_URL is the full URL of the API service; fall back to same-origin
+// for local dev where the Vite proxy forwards /api → localhost:8080.
+// Treat an empty/whitespace value the same as unset.
+const rawApiUrl = (import.meta.env.VITE_API_URL as string | undefined)?.trim();
+const apiBase: string = rawApiUrl || window.location.origin;
+
 let _socket: Socket | null = null;
 
 function getSocket(): Socket {
   if (!_socket) {
-    _socket = io(window.location.origin, {
+    _socket = io(apiBase, {
       path: "/api/socket.io",
       transports: ["polling", "websocket"],
       autoConnect: false,
@@ -13,6 +20,7 @@ function getSocket(): Socket {
       reconnectionAttempts: Infinity,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
+      withCredentials: true,
     });
   }
   return _socket;

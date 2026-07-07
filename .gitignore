@@ -47,3 +47,7 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Local env overrides — never commit these
+artifacts/tg-erp/.env.local
+artifacts/api-server/.env.local

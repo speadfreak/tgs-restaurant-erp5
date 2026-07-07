@@ -4,9 +4,22 @@ import type { Server as HttpServer } from "http";
 let _io: Server | null = null;
 
 export function initSocket(httpServer: HttpServer): Server {
+  // Mirror the CORS policy from app.ts: fail closed in production when
+  // FRONTEND_URL is not set; fall back to localhost only in development.
+  const raw = process.env["FRONTEND_URL"];
+  const allowedOrigins: string[] = raw
+    ? raw.split(",").map((o) => o.trim()).filter(Boolean)
+    : process.env["NODE_ENV"] === "production"
+      ? []
+      : ["http://localhost:5173", "http://localhost:3000", "http://localhost:25390"];
+
   _io = new Server(httpServer, {
     path: "/api/socket.io",
-    cors: { origin: "*", methods: ["GET", "POST"] },
+    cors: {
+      origin: allowedOrigins,
+      methods: ["GET", "POST"],
+      credentials: true,
+    },
     transports: ["polling", "websocket"],
   });
 
