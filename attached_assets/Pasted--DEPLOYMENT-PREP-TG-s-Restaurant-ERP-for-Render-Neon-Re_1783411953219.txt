@@ -1,0 +1,359 @@
+# DEPLOYMENT PREP — TG's Restaurant ERP for Render + Neon
+### (ቲጂ ምግብ ቤት — Replit Agent Brief)
+
+Prepare this project for production deployment on Render (frontend + backend) with Neon PostgreSQL as the database. Do not change any feature code. Only add/modify build configuration, environment variable handling, and deployment config files. Read the actual project structure before making any changes.
+
+---
+
+## 0. READ FIRST — UNDERSTAND THE STRUCTURE
+
+Before touching anything, read these files:
+- Root `package.json` — workspace scripts
+- `artifacts/api-server/package.json` — backend scripts
+- `artifacts/tg-erp/package.json` — frontend scripts
+- `artifacts/api-server/src/index.ts` — how the server starts and what port it reads
+- `artifacts/tg-erp/vite.config.ts` — how the frontend is built
+- `lib/db/drizzle.config.ts` — how the DB connection is configured
+
+Map the exact script names before writing anything. Do not assume script names — use what actually exists.
+
+---
+
+## 1. BACKEND — API SERVER PRODUCTION BUILD
+
+### 1.1 Confirm build output exists
+
+The backend (Express + TypeScript) needs to compile to JavaScript for production. Check if a build script already exists in `artifacts/api-server/package.json`:
+
+- If `"build": "..."` exists → read it, confirm it outputs to a `dist/` folder
+- If it does not exist → add it:
+
+```json
+"build": "node build.mjs"
+```
+
+Or if using tsc directly:
+```json
+"build": "tsc --project tsconfig.json"
+```
+
+Check `artifacts/api-server/tsconfig.json` for `"outDir"` — this is where compiled JS goes. If `outDir` is not set, add `"outDir": "./dist"` to the tsconfig compilerOptions.
+
+### 1.2 Confirm the start script uses the compiled output
+
+The production start command must run the compiled JS, not `ts-node` or `tsx`. Check `artifacts/api-server/package.json` for a `"start"` script:
+
+- It must be: `"start": "node dist/index.js"` (adjust path to match actual outDir)
+- If it currently uses `tsx` or `ts-node` → add a separate `"start"` script for production:
+
+```json
+"start": "node dist/index.js",
+"dev": "tsx watch src/index.ts"
+```
+
+### 1.3 Environment variable handling — production safety
+
+Open `artifacts/api-server/src/index.ts` (or wherever the server starts). Confirm:
+
+1. `PORT` is read from environment: `const port = process.env.PORT || 3000`
+2. The server listens on `0.0.0.0` not just `localhost`:
+```typescript
+app.listen(port, '0.0.0.0', () => {
+  console.log(`Server running on port ${port}`);
+});
+```
+If it listens only on `localhost` or `127.0.0.1` — change it to `0.0.0.0`. Render requires this.
+
+3. `DATABASE_URL` is read from `process.env.DATABASE_URL` — confirm this in `lib/db/src/index.ts` or wherever the Drizzle client is initialized.
+
+4. `JWT_SECRET`, `JWT_REFRESH_SECRET`, `SETTINGS_ENCRYPTION_KEY` are all read from `process.env` — do a global search for these and confirm none are hardcoded.
+
+### 1.4 CORS configuration for production
+
+Open the Express app setup (likely `artifacts/api-server/src/app.ts`). Find the CORS configuration. It probably looks like:
+
+```typescript
+app.use(cors({ origin: 'http://localhost:5173' }))
+```
+
+Change it to read from an environment variable with a fallback:
+
+```typescript
+const allowedOrigins = process.env.FRONTEND_URL
+  ? process.env.FRONTEND_URL.split(',')
+  : ['http://localhost:5173', 'http://localhost:3000'];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+}));
+```
+
+This lets Render's backend accept requests from the deployed frontend URL without hardcoding it.
+
+### 1.5 Socket.IO CORS — same fix
+
+Find where Socket.IO is initialized (likely `artifacts/api-server/src/lib/socket.ts`). Apply the same CORS fix:
+
+```typescript
+const io = new Server(httpServer, {
+  cors: {
+    origin: process.env.FRONTEND_URL
+      ? process.env.FRONTEND_URL.split(',')
+      : ['http://localhost:5173'],
+    credentials: true,
+  },
+});
+```
+
+### 1.6 Add a root-level backend build script
+
+In the ROOT `package.json`, confirm or add a script that builds the backend from the root (Render runs commands from the repo root):
+
+```json
+"build:api": "pnpm --filter api-server run build",
+"start:api": "pnpm --filter api-server run start"
+```
+
+Or whatever the actual package name is in `artifacts/api-server/package.json` under `"name"`.
+
+---
+
+## 2. FRONTEND — VITE BUILD FOR PRODUCTION
+
+### 2.1 API URL environment variable
+
+Open `artifacts/tg-erp/vite.config.ts`. The frontend needs to know where the backend API is at build time. Vite exposes env variables prefixed with `VITE_`.
+
+Check how the frontend currently references the API base URL. Search for:
+- `localhost:3000`
+- `process.env.API`
+- `import.meta.env.VITE_`
+- Any base URL config
+
+Find the central place where the API base URL is defined. It is likely in one of:
+- `artifacts/tg-erp/src/lib/utils.ts`
+- `artifacts/tg-erp/src/lib/auth.tsx`
+- `lib/api-client-react/src/custom-fetch.ts`
+
+**Change the API base URL to use an environment variable:**
+
+```typescript
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+```
+
+If `custom-fetch.ts` is the central fetch wrapper, update it there. If the base URL is set in multiple places, consolidate to one.
+
+### 2.2 Socket.IO connection URL
+
+Find where the frontend initializes the Socket.IO client connection. Search for `io(` or `socket.connect` in the frontend source. Update it to use the same env variable:
+
+```typescript
+const socket = io(import.meta.env.VITE_API_URL || 'http://localhost:3000', {
+  withCredentials: true,
+  transports: ['websocket', 'polling'],
+});
+```
+
+### 2.3 Add environment variable file for local dev
+
+Create `artifacts/tg-erp/.env.local` (this file is gitignored by Vite by default — do NOT commit it):
+
+```
+VITE_API_URL=http://localhost:3000
+```
+
+Create `artifacts/tg-erp/.env.production` (this IS committed — it contains non-secret defaults):
+
+```
+# Override this in Render's environment variables with your actual backend URL
+VITE_API_URL=https://your-api-service.onrender.com
+```
+
+Add a note in this file: "Set VITE_API_URL in Render's environment variables to your actual deployed API URL."
+
+### 2.4 Confirm build output directory
+
+Check `artifacts/tg-erp/vite.config.ts` for `build.outDir`. It should be `dist` (default). Render needs to know this path: `artifacts/tg-erp/dist`.
+
+### 2.5 Add root-level frontend build script
+
+In the ROOT `package.json`, confirm or add:
+
+```json
+"build:web": "pnpm --filter tg-erp run build"
+```
+
+---
+
+## 3. DATABASE — NEON CONNECTION COMPATIBILITY
+
+### 3.1 Neon connection string format
+
+Neon PostgreSQL uses a standard connection string format. Confirm the Drizzle client in `lib/db/src/index.ts` reads from `process.env.DATABASE_URL` and uses a compatible PostgreSQL driver (pg, postgres.js, or @neondatabase/serverless).
+
+If it uses `@neondatabase/serverless` driver — it works with Neon perfectly, no changes needed.
+
+If it uses standard `pg` or `postgres` — add SSL configuration for Neon:
+
+```typescript
+import { drizzle } from 'drizzle-orm/node-postgres';
+import { Pool } from 'pg';
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+});
+
+export const db = drizzle(pool);
+```
+
+The `ssl: { rejectUnauthorized: false }` is required for Neon connections in production.
+
+### 3.2 Migration command for Render shell
+
+After deploying, the DB schema must be pushed. The command Render needs to run once in the Shell:
+
+```bash
+pnpm run db:push
+pnpm run db:seed
+```
+
+Confirm these scripts exist at the root level and work. If they don't, add them to root `package.json`:
+
+```json
+"db:push": "pnpm --filter db run db:push",
+"db:seed": "tsx scripts/src/seed.ts"
+```
+
+---
+
+## 4. CREATE RENDER CONFIGURATION FILES
+
+### 4.1 `render.yaml` — Infrastructure as Code (optional but helpful)
+
+Create a `render.yaml` file at the project root. This tells Render exactly how to deploy both services:
+
+```yaml
+services:
+  # Backend API Service
+  - type: web
+    name: tgs-restaurant-api
+    runtime: node
+    rootDir: artifacts/api-server
+    buildCommand: cd ../.. && pnpm install && pnpm --filter api-server run build
+    startCommand: node dist/index.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      - key: DATABASE_URL
+        sync: false  # Set manually in Render dashboard
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_REFRESH_SECRET
+        sync: false
+      - key: SETTINGS_ENCRYPTION_KEY
+        sync: false
+      - key: FRONTEND_URL
+        sync: false  # Set to your static site URL after deploying frontend
+      - key: TWILIO_ACCOUNT_SID
+        value: placeholder
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_WHATSAPP_NUMBER
+        value: placeholder
+      - key: SENDGRID_API_KEY
+        value: placeholder
+
+  # Frontend Static Site
+  - type: static
+    name: tgs-restaurant-web
+    rootDir: artifacts/tg-erp
+    buildCommand: cd ../.. && pnpm install && pnpm --filter tg-erp run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_API_URL
+        sync: false  # Set to your API service URL after deploying backend
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+```
+
+The `routes` section under the static site is critical — it tells Render to serve `index.html` for all routes, which is required for React Router to work. Without it, navigating to `/kitchen` or `/delivery` directly returns a 404.
+
+### 4.2 `.gitignore` additions
+
+Add to the root `.gitignore` if not already present:
+```
+artifacts/tg-erp/.env.local
+artifacts/api-server/.env.local
+```
+
+---
+
+## 5. FINAL CHECKLIST BEFORE PUSHING TO GITHUB
+
+Run these verifications in Replit before pushing:
+
+**Build test — backend:**
+```bash
+cd artifacts/api-server && pnpm run build
+```
+Must complete with no TypeScript errors. Check that `dist/index.js` exists after.
+
+**Build test — frontend:**
+```bash
+cd artifacts/tg-erp && pnpm run build
+```
+Must complete with no errors. Check that `artifacts/tg-erp/dist/index.html` exists after.
+
+**Environment variable audit — backend:**
+Run this search and list every result:
+```bash
+grep -r "process\.env\." artifacts/api-server/src --include="*.ts" | grep -v "node_modules"
+```
+Every `process.env.SOMETHING` must be documented. None should be hardcoded fallback values that would mask a missing secret in production.
+
+**CORS check:**
+Confirm the CORS origin is reading from `process.env.FRONTEND_URL` not hardcoded to localhost.
+
+**Port check:**
+Confirm server listens on `0.0.0.0` not `localhost`.
+
+**Socket.IO URL check:**
+Confirm Socket.IO client reads from `import.meta.env.VITE_API_URL`.
+
+---
+
+## 6. PUSH TO GITHUB
+
+After all verifications pass, push to GitHub:
+
+```bash
+git add .
+git commit -m "chore: prepare for Render production deployment"
+git push origin main
+```
+
+---
+
+## 7. WHAT TO REPORT BACK
+
+Report:
+1. ✅ Backend builds successfully (`dist/index.js` exists)
+2. ✅ Frontend builds successfully (`dist/index.html` exists)
+3. ✅ Server listens on `0.0.0.0`
+4. ✅ CORS reads from `FRONTEND_URL` env var
+5. ✅ Socket.IO reads from `VITE_API_URL` env var
+6. ✅ `render.yaml` created at project root
+7. ✅ All changes pushed to GitHub
+8. List of any `process.env` variables found that are not in the env var list above

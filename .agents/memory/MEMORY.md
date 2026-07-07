@@ -2,3 +2,4 @@
 - [Auth token pattern](auth-token-pattern.md) — JWT in localStorage; setAuthTokenGetter exported from main @workspace/api-client-react index, not /src/custom-fetch.
 - [Orval queryKey required](orval-querykey-required.md) — when passing enabled or refetchInterval, must also pass queryKey via getXxxQueryKey() helper or TypeScript fails.
 - [DB lib rebuild](db-lib-rebuild.md) — after any schema file change, run pnpm run typecheck:libs before leaf artifact checks or imports appear missing.
+- [Render deployment layout](render-deployment.md) — frontend outDir is dist/public (not dist); backend entry is dist/index.mjs; CORS must fail closed in prod when FRONTEND_URL unset.
