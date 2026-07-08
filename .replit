@@ -54,3 +54,20 @@ TWILIO_WHATSAPP_FROM = "placeholder"
 JWT_SECRET = "1d44a5896a195effb7a64e01441778a2be30b67b67ca25ff596e14c965bf5285fa6d0c610693aae39f8d58599c6b7936d04846677f4dcf64434cd2e723c3bc06"
 JWT_REFRESH_SECRET = "73ff275e3e8d60b6757abb4edf88a512706635d6c2230e546d1efd520a21a13142e12b34283ba515e3769aab9317f221c6ad9bc45039aeb632c96250b6ac2bd5"
 SETTINGS_ENCRYPTION_KEY = "2f9940af832000c7b25a0302ad84c69a"
+NEON_DATABASE_URL = "postgresql://neondb_owner:npg_sS3uR9zapXML@ep-sweet-recipe-atj4kna4.c-9.us-east-1.aws.neon.tech/neondb?sslmode=require"
+
+[[ports]]
+localPort = 8080
+externalPort = 8080
+
+[[ports]]
+localPort = 8081
+externalPort = 80
+
+[[ports]]
+localPort = 25390
+externalPort = 3000
+
+[[ports]]
+localPort = 25391
+externalPort = 3001
