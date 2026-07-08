@@ -64,14 +64,21 @@ router.get("/finance/commissions/mine", authenticate, async (req, res): Promise<
 
 router.get("/finance/entries", authenticate, requireRole(...FINANCE_ROLES), async (req, res): Promise<void> => {
   const isAdmin = ADMIN_ROLES.includes(req.user!.role);
+
+  // finance_staff must have an assigned branch — block unassigned users outright
+  if (!isAdmin && !req.user!.branchId) {
+    res.status(403).json({ error: "Your account has no branch assigned — contact your administrator" });
+    return;
+  }
+
   const branchId = req.query.branchId ? parseInt(req.query.branchId as string, 10) : null;
   const date = req.query.date as string | undefined;
 
   let entries = await db.select().from(financeEntriesTable);
 
-  // finance_staff can only see their own branch
-  if (!isAdmin && req.user!.branchId) {
-    entries = entries.filter(e => e.branchId === req.user!.branchId);
+  // finance_staff is always scoped to their own branch — they cannot query other branches
+  if (!isAdmin) {
+    entries = entries.filter(e => e.branchId === req.user!.branchId!);
   } else if (branchId) {
     entries = entries.filter(e => e.branchId === branchId);
   }
@@ -108,6 +115,14 @@ router.get("/finance/entries", authenticate, requireRole(...FINANCE_ROLES), asyn
 });
 
 router.post("/finance/entries", authenticate, requireRole(...FINANCE_ROLES), async (req, res): Promise<void> => {
+  const isAdmin = ADMIN_ROLES.includes(req.user!.role);
+
+  // finance_staff without a branch cannot create entries
+  if (!isAdmin && !req.user!.branchId) {
+    res.status(403).json({ error: "Your account has no branch assigned — contact your administrator" });
+    return;
+  }
+
   const { entryType, category, amountAed, description, referenceNumber, notes, entryDate, branchId: bodyBranchId } = req.body;
   if (!entryType || !category || !amountAed || !description || !entryDate) {
     res.status(400).json({ error: "Missing required fields: entryType, category, amountAed, description, entryDate" });
@@ -117,10 +132,10 @@ router.post("/finance/entries", authenticate, requireRole(...FINANCE_ROLES), asy
     res.status(400).json({ error: "entryType must be 'income' or 'expense'" });
     return;
   }
-  const isAdmin = ADMIN_ROLES.includes(req.user!.role);
+  // finance_staff always uses their own branch — they cannot create entries for other branches
   const effectiveBranchId: number = isAdmin && bodyBranchId
     ? parseInt(bodyBranchId, 10)
-    : (req.user!.branchId ?? parseInt(bodyBranchId, 10));
+    : req.user!.branchId!;
   if (!effectiveBranchId) { res.status(400).json({ error: "No branch available" }); return; }
 
   const [entry] = await db.insert(financeEntriesTable).values({
@@ -213,6 +228,10 @@ router.delete("/finance/entries/:id", authenticate, requireRole(...FINANCE_ROLES
 
 router.get("/finance/entries/summary", authenticate, requireRole(...FINANCE_ROLES), async (req, res): Promise<void> => {
   const isAdmin = ADMIN_ROLES.includes(req.user!.role);
+  if (!isAdmin && !req.user!.branchId) {
+    res.status(403).json({ error: "Your account has no branch assigned" });
+    return;
+  }
   const branchId = req.query.branchId ? parseInt(req.query.branchId as string, 10) : (req.user!.branchId ?? null);
   const date = (req.query.date as string) ?? new Date().toISOString().split("T")[0];
 

@@ -286,8 +286,10 @@ export default function DeliveryPortal() {
   const myOrders = orders.filter(o => o.relayedByUserId === user?.id || o.assignedDeliveryUserId === user?.id);
   const sharedPool = orders.filter(o => o.status === "ready" && !o.assignedDeliveryUserId && o.relayedByUserId !== user?.id);
   const active = myOrders.filter(o => !["delivered", "failed"].includes(o.status));
+  // Use updatedAt (= last status-change time) as the delivery-completion timestamp
+  // since createdAt is the order creation time, not when it was delivered.
   const recentlyDelivered = myOrders.filter(o => o.status === "delivered"
-    && new Date(o.createdAt).toDateString() === new Date().toDateString());
+    && new Date(o.updatedAt ?? o.createdAt).toDateString() === new Date().toDateString());
 
   if (isLoading) return (
     <div className="min-h-screen flex items-center justify-center" style={{ background: "hsl(0 0% 4%)" }}>
