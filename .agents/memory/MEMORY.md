@@ -3,3 +3,5 @@
 - [Orval queryKey required](orval-querykey-required.md) — when passing enabled or refetchInterval, must also pass queryKey via getXxxQueryKey() helper or TypeScript fails.
 - [DB lib rebuild](db-lib-rebuild.md) — after any schema file change, run pnpm run typecheck:libs before leaf artifact checks or imports appear missing.
 - [Render deployment layout](render-deployment.md) — frontend outDir is dist/public (not dist); backend entry is dist/index.mjs; CORS must fail closed in prod when FRONTEND_URL unset.
+- [Finance entries auth](finance-entries-auth.md) — finance_staff with null branchId must be 403'd; branch scope is enforced server-side not via query params.
+- [Express 5 OPTIONS wildcard](express5-options.md) — app.options('*', cors()) works in Express 5.2.1 without issue; seed: tables without unique constraints need existence checks, not bare onConflictDoNothing.
