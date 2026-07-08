@@ -1,4 +1,9 @@
-import express, { type Express, type Request, type Response, type NextFunction } from "express";
+import express, {
+  type Express,
+  type Request,
+  type Response,
+  type NextFunction,
+} from "express";
 import cors, { type CorsOptions } from "cors";
 import pinoHttp from "pino-http";
 import router from "./routes";
@@ -10,9 +15,17 @@ const app: Express = express();
 // In production, FRONTEND_URL must be set — fall back only in development.
 function buildAllowedOrigins(): string[] {
   const raw = process.env["FRONTEND_URL"];
-  if (raw) return raw.split(",").map((o) => o.trim()).filter(Boolean);
+  if (raw)
+    return raw
+      .split(",")
+      .map((o) => o.trim())
+      .filter(Boolean);
   if (process.env["NODE_ENV"] === "production") return []; // fail closed
-  return ["http://localhost:5173", "http://localhost:3000", "http://localhost:25390"];
+  return [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://localhost:25390",
+  ];
 }
 
 const allowedOrigins = buildAllowedOrigins();
@@ -31,7 +44,7 @@ const corsOptions: CorsOptions = {
 
 // Handle CORS preflight OPTIONS for ALL routes BEFORE any route registration.
 // Without this, browsers abort CORS preflight before the route handler runs.
-app.options("*", cors(corsOptions));
+app.options("/{*path}", cors(corsOptions));
 app.use(cors(corsOptions));
 
 app.use(
