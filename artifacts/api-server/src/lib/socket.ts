@@ -20,7 +20,10 @@ export function initSocket(httpServer: HttpServer): Server {
       methods: ["GET", "POST"],
       credentials: true,
     },
-    transports: ["polling", "websocket"],
+    // Prefer websocket, fall back to long-polling (required for WSS on Render/HTTPS)
+    transports: ["websocket", "polling"],
+    // EIO3 backwards-compatibility so older socket.io-client versions can connect
+    allowEIO3: true,
   });
 
   _io.on("connection", (socket) => {

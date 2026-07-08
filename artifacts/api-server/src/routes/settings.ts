@@ -47,6 +47,13 @@ const SETTING_DEFAULTS: Record<string, { label: string; isSensitive: boolean; se
   max_failed_login_attempts:       { label: "Max Failed Login Attempts",        isSensitive: false, section: "system" },
   lockout_duration_minutes:        { label: "Lockout Duration (minutes)",       isSensitive: false, section: "system" },
   audit_log_retention_days:        { label: "Audit Log Retention (days)",       isSensitive: false, section: "system" },
+  // Microsoft integrations
+  teams_webhook_url:               { label: "Teams Incoming Webhook URL",       isSensitive: true,  section: "microsoft", description: "Paste the Incoming Webhook URL from your Teams channel connector" },
+  teams_notify_new_orders:         { label: "Notify on New Orders",             isSensitive: false, section: "microsoft", description: "Post a card to Teams when a new order is created (true/false)" },
+  teams_notify_delivered:          { label: "Notify on Delivery Complete",      isSensitive: false, section: "microsoft", description: "Post a card to Teams when an order is delivered (true/false)" },
+  teams_notify_lottery:            { label: "Notify on Lottery Draw",           isSensitive: false, section: "microsoft", description: "Post a card to Teams when the daily lottery draw completes (true/false)" },
+  teams_notify_large_expense:      { label: "Notify on Large Expense",          isSensitive: false, section: "microsoft", description: "Post a card to Teams when an expense exceeds this AED amount (0 = disabled)" },
+  excel_auto_export_enabled:       { label: "Enable Scheduled Excel Exports",   isSensitive: false, section: "microsoft", description: "Automatically generate and send daily .xlsx reports (true/false)" },
 };
 
 router.get("/settings", async (_req, res): Promise<void> => {

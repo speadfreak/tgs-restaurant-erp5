@@ -28,6 +28,7 @@ import SettingsPage from "@/pages/settings";
 // Portals (no sidebar layout)
 import ChefPortal from "@/pages/chef-portal";
 import DeliveryPortal from "@/pages/delivery-portal";
+import FinancePortal from "@/pages/finance-portal";
 
 // Public Pages
 import OrderTracker from "@/pages/track";
@@ -59,6 +60,7 @@ function Router() {
       {/* Dedicated portals — no admin sidebar */}
       <Route path="/chef" component={ChefPortal} />
       <Route path="/delivery" component={DeliveryPortal} />
+      <Route path="/finance-portal" component={FinancePortal} />
 
       {/* Admin / Manager routes inside AppLayout */}
       <Route path="/"><AppLayout><Dashboard /></AppLayout></Route>

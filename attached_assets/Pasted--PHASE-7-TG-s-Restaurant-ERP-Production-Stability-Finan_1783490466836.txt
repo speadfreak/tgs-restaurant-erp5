@@ -1,0 +1,467 @@
+# PHASE 7 — TG's Restaurant ERP: Production Stability, Finance Portal, Microsoft Integration & Feature Completion
+### (ቲጂ ምግብ ቤት — Replit Agent Brief)
+
+Read every section fully before writing a single line of code. This phase has three tiers: (1) fix what's broken in production, (2) add the new Finance Portal and Microsoft integration, (3) add the lottery delivery message feature. Fix in that exact order.
+
+---
+
+## 0. PRODUCTION ENVIRONMENT FACTS
+
+The system is now deployed on:
+- **Frontend:** `https://tgs-restaurant-erp-web.onrender.com` (Render Static Site)
+- **Backend:** `https://tgs-restaurant-erp5.onrender.com` (Render Web Service)
+- **Database:** Neon PostgreSQL (production)
+
+Environment variables confirmed set in Render:
+- `FRONTEND_URL` = `https://tgs-restaurant-erp-web.onrender.com`
+- `VITE_API_URL` = `https://tgs-restaurant-erp5.onrender.com`
+- `DATABASE_URL` = Neon connection string
+- All JWT secrets and SETTINGS_ENCRYPTION_KEY set
+
+---
+
+## TIER 1 — CRITICAL PRODUCTION FIXES
+
+### FIX 1 — SOCKET.IO NOT WORKING IN PRODUCTION (root cause of empty portals)
+
+**The problem:** Socket.IO works on Replit (HTTP/WS) but fails on Render (HTTPS/WSS). In production, WebSocket connections must use `wss://` not `ws://`. If the Socket.IO client is connecting to a hardcoded `ws://` URL or falling back to polling incorrectly, real-time updates between portals will silently fail.
+
+**Fix the Socket.IO client connection** in `artifacts/tg-erp/src/hooks/use-socket.ts`:
+
+```typescript
+const socket = io(import.meta.env.VITE_API_URL || window.location.origin, {
+  withCredentials: true,
+  transports: ['websocket', 'polling'], // try websocket first, fall back to polling
+  secure: true, // force WSS in production
+  reconnection: true,
+  reconnectionAttempts: 5,
+  reconnectionDelay: 1000,
+});
+```
+
+**Fix the Socket.IO server** in `artifacts/api-server/src/lib/socket.ts` — confirm these options are set:
+```typescript
+const io = new Server(httpServer, {
+  cors: {
+    origin: process.env.FRONTEND_URL ? process.env.FRONTEND_URL.split(',') : ['http://localhost:5173'],
+    credentials: true,
+    methods: ['GET', 'POST'],
+  },
+  transports: ['websocket', 'polling'],
+  allowEIO3: true, // backwards compatibility
+});
+```
+
+**Also confirm** the Socket.IO client re-joins rooms after reconnect — must use `socket.on('connect', ...)` not `socket.once('connect', ...)`:
+```typescript
+socket.on('connect', () => {
+  if (user?.branchId) {
+    socket.emit('join_room', `branch:${user.branchId}`);
+    socket.emit('join_room', `branch:${user.branchId}:${roleRoom}`);
+  }
+});
+```
+
+### FIX 2 — MENU NOT DISPLAYING IN DELIVERY PORTAL (production)
+
+**The problem:** In production, the API call for menu items may be failing due to CORS preflight, wrong base URL, or the `VITE_API_URL` not being read correctly at build time.
+
+**Step 1 — Verify the API base URL is baked into the build:**
+In `artifacts/tg-erp/src/main.tsx` or wherever `setBaseUrl` is called:
+```typescript
+const apiUrl = import.meta.env.VITE_API_URL;
+if (apiUrl) setBaseUrl(apiUrl);
+```
+If `VITE_API_URL` was added to Render's environment AFTER the first build, the old build doesn't have it. **Trigger a manual redeploy** of the frontend after confirming the env var is set.
+
+**Step 2 — Confirm menu endpoint has no auth guard on GET:**
+```typescript
+// Must be requireAuth (any role) NOT requireRole('super_admin', ...)
+router.get('/items', requireAuth, async (req, res) => { ... })
+router.get('/categories', requireAuth, async (req, res) => { ... })
+```
+
+**Step 3 — Add explicit OPTIONS handling for CORS preflight** in `artifacts/api-server/src/app.ts`:
+```typescript
+app.options('*', cors()); // handle preflight for ALL routes
+```
+This must come BEFORE all route registrations.
+
+### FIX 3 — ORDERS NOT APPEARING IN CHEF PORTAL (production)
+
+Same root cause as Fix 1 (Socket.IO) + the branch scoping issue from Phase 6.
+
+**Confirm in the database that all staff have branch_id set:**
+```sql
+SELECT name, role, branch_id FROM users WHERE role IN ('chef', 'delivery_staff', 'order_intake');
+```
+Any NULL branch_id → update to branch 1 (or whatever the seeded branch ID is).
+
+**Also confirm** the kitchen queue endpoint returns orders for the chef's branch:
+- `GET /api/kitchen/queue` with chef JWT must return `200` with orders, not empty array
+- The query must use `req.user.branchId` as fallback when no `?branchId` param is sent
+
+### FIX 4 — ORDER TIMESTAMPS IN ADMIN CENTER
+
+Add precise timestamps to every order's lifecycle, displayed in the Admin Orders detail view and the Mission Control dashboard.
+
+**In the orders table** (confirm these columns exist — add via migration if not):
+- `created_at` — when order was placed
+- `accepted_at` — when chef accepted (already exists from Phase 3)
+- `marked_ready_at` — when chef marked ready
+- `picked_up_at` — when delivery staff picked up
+- `delivered_at` — when delivery confirmed
+
+**In the Admin Order detail view**, show a clear timeline:
+```
+📥 Order Received    — 14:32:05
+👨‍🍳 Accepted by Chef  — 14:33:12  (1m 7s after order)
+✅ Marked Ready      — 14:48:30  (15m 18s prep time)
+🛵 Picked Up         — 14:51:02  (2m 32s wait)
+🏠 Delivered         — 15:12:44  (21m 42s delivery)
+```
+All times in UAE timezone (UTC+4). Show elapsed time between each stage.
+
+**In the Admin Orders list table**, add columns:
+- Order Time (created_at formatted as HH:MM)
+- Prep Time (accepted_at → marked_ready_at delta in minutes)
+- Delivery Time (picked_up_at → delivered_at delta in minutes)
+- Total Time (created_at → delivered_at)
+
+### FIX 5 — ALL ADMIN PAGES SHOWING ERRORS / NOT LOADING CONTENT
+
+**Systematic fix for all pages that show errors in production:**
+
+For every admin page that shows an error or empty state, the issue is one of:
+- API call using wrong base URL (hardcoded localhost instead of VITE_API_URL)
+- API endpoint returning 500 due to missing env var or DB connection issue
+- Missing error boundary showing blank page instead of useful error
+
+**Fix globally:**
+
+1. Search for any remaining `localhost:3000` or `localhost:5173` hardcoded in frontend source:
+```bash
+grep -r "localhost:3000\|localhost:5173" artifacts/tg-erp/src --include="*.ts" --include="*.tsx"
+```
+Replace every instance with `import.meta.env.VITE_API_URL || ''`
+
+2. Add a global error boundary component that wraps each page — shows a user-friendly "Something went wrong — [error message]" instead of a blank screen. This makes debugging in production far easier.
+
+3. For every page that fetches data on load, add proper loading states and error states:
+```typescript
+if (isLoading) return <LoadingSpinner />
+if (error) return <ErrorMessage message={error.message} />
+if (!data || data.length === 0) return <EmptyState message="No data yet" />
+```
+
+4. In the backend, add a global error handler at the end of `app.ts`:
+```typescript
+app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
+  console.error('Unhandled error:', err);
+  res.status(500).json({ 
+    error: process.env.NODE_ENV === 'production' ? 'Internal server error' : err.message 
+  });
+});
+```
+
+### FIX 6 — DATABASE REBUILD FOR PRODUCTION
+
+Run this from Replit Shell with the Neon DATABASE_URL to ensure schema is complete and seed data is fresh:
+
+```bash
+DATABASE_URL=$NEON_DATABASE_URL pnpm run db:push
+DATABASE_URL=$NEON_DATABASE_URL pnpm run db:seed
+```
+
+If the seed script fails due to unique constraint violations (data already exists), add `ON CONFLICT DO NOTHING` or upsert logic to the seed script so it can be re-run safely without errors.
+
+---
+
+## TIER 2 — NEW FEATURES
+
+### FEATURE 1 — FINANCE PORTAL (New Role + New Portal)
+
+#### 1.1 New Role: `finance_staff`
+
+Add `finance_staff` to the RBAC role enum alongside existing roles.
+
+**Access permissions:**
+- Can access: Finance Portal only (`/finance-portal/*`)
+- Cannot access: Admin Command Center, Chef Portal, Delivery Portal, Addis Portal
+- Login redirects automatically to `/finance-portal`
+
+#### 1.2 Finance Portal — Staff View (`/finance-portal`)
+
+A dedicated, focused portal for finance staff to log expenses and income entries. Clean, professional design matching the TG's Restaurant dark theme.
+
+**Page 1 — Log New Entry:**
+Form with fields:
+- Entry Type: toggle between **Income** / **Expense**
+- Category (dropdown, admin-configurable):
+  - Income categories: "Delivery Order", "Catering", "Other Income"
+  - Expense categories: "Ingredients", "Staff Wages", "Rent", "Utilities", "Marketing", "Maintenance", "Transport", "Other Expense"
+- Amount (AED) — number input
+- Description — text field
+- Date — date picker (defaults to today)
+- Branch — dropdown (scoped to their assigned branch)
+- Reference/Receipt Number — optional text
+- Notes — optional textarea
+- Submit button
+
+On submit → creates real entry in `finance_entries` table → appears immediately in Admin Finance module.
+
+**Page 2 — My Recent Entries:**
+- Table of all entries logged by this staff member
+- Columns: Date, Type (Income/Expense badge), Category, Amount AED, Description, Branch, Status
+- Last 30 days by default, date range filterable
+- Edit button (can edit entries within 24 hours of creation — locked after that for audit integrity)
+- Delete button (only within 1 hour of creation, with confirmation)
+
+**Page 3 — Summary:**
+- Simple daily totals for their branch: today's income logged, today's expenses logged, net
+- Not the full P&L — just what they've personally entered today and this week
+
+**Portal header:**
+- Finance staff name + role badge
+- Branch name
+- "Finance Portal" title with accounting icon
+- Logout button
+
+#### 1.3 New Database Table: `finance_entries`
+
+```sql
+CREATE TABLE finance_entries (
+  id SERIAL PRIMARY KEY,
+  branch_id INTEGER NOT NULL REFERENCES branches(id),
+  logged_by_user_id INTEGER NOT NULL REFERENCES users(id),
+  entry_type VARCHAR(10) NOT NULL CHECK (entry_type IN ('income', 'expense')),
+  category VARCHAR(100) NOT NULL,
+  amount_aed DECIMAL(10,2) NOT NULL,
+  description TEXT NOT NULL,
+  reference_number VARCHAR(100),
+  notes TEXT,
+  entry_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  is_locked BOOLEAN DEFAULT FALSE, -- locked after 24h
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+#### 1.4 Admin Finance Module Integration
+
+In the Admin Command Center → Finance page, add a new section **"Staff Finance Entries"**:
+- Shows all entries from `finance_entries` table (not just order-derived revenue)
+- Filterable by: date range, branch, type (income/expense), category, staff member
+- These entries are included in the P&L calculation:
+  - `finance_entries` income → adds to total income
+  - `finance_entries` expenses → adds to total expenses
+- Separate line items in the P&L breakdown: "Staff-Logged Income" and "Staff-Logged Expenses" shown distinctly from order-derived revenue and import costs
+
+#### 1.5 Finance Staff Management
+
+In Admin → Staff Management page → add a new tab **"Finance"** alongside existing role tabs.
+- Add/edit/deactivate finance staff the same way as other roles
+- Finance staff can be assigned to a specific branch
+- Credentials generated and shown/SMSd same as other staff
+
+---
+
+### FEATURE 2 — MICROSOFT TOOLS INTEGRATION
+
+Integrate the following Microsoft tools into the ERP. All integrations use Microsoft Graph API (OAuth 2.0) — credentials managed via the Settings panel.
+
+#### 2.1 Settings Panel — Microsoft Section
+
+Add a new **"Microsoft"** tab in Settings → Integrations:
+
+| Setting | Field |
+|---|---|
+| Microsoft Tenant ID | Text (masked) |
+| Microsoft Client ID | Text (masked) |
+| Microsoft Client Secret | Text (masked, encrypted AES-256) |
+| Connected Microsoft Account | Read-only — shows connected account email after OAuth |
+| Connect Microsoft Account | OAuth button — opens Microsoft login popup |
+| Test Connection | Button — confirms Graph API access |
+
+#### 2.2 Microsoft Excel Export (.xlsx)
+
+Replace/supplement existing CSV exports with proper Excel `.xlsx` exports:
+- Use the `exceljs` npm package
+- Every report in Audit & Reports page gets an **"Export as Excel"** button alongside the existing CSV button
+- Excel exports include:
+  - Proper column headers with bold formatting
+  - Auto-sized columns
+  - TG's Restaurant name and report date in the header row
+  - Color-coded rows (e.g., green for delivered orders, red for failed)
+  - Separate sheets per data category in weekly reports (Sheet 1: Revenue, Sheet 2: Orders, Sheet 3: Staff Activity)
+
+#### 2.3 Microsoft Teams Notifications
+
+Send real-time operational alerts to a Microsoft Teams channel via Teams Incoming Webhook (simpler than full Graph API — just a webhook URL):
+
+**Settings field:** `Microsoft Teams Webhook URL` (in the new Microsoft settings tab)
+
+**Alerts sent to Teams:**
+- 🆕 New order received (with order code, branch, channel)
+- ✅ Order delivered (with order code, rider name, time taken)
+- ⚠️ Order stuck (no chef acceptance after 10 minutes)
+- 🏆 Lottery winner drawn (with winner name, lucky number, prize)
+- 📦 New Addis shipment logged (with supplier, value in AED)
+- 💰 Large expense logged by finance staff (above AED 500)
+
+Each Teams message uses a simple Adaptive Card format with TG's Restaurant branding (amber color theme).
+
+**Implementation:** A reusable `sendTeamsNotification(webhookUrl, title, body, color)` function called at the relevant action points in the backend. If the webhook URL is not configured in Settings, skip silently.
+
+#### 2.4 Microsoft Outlook Email (via Graph API)
+
+As an alternative to SendGrid for sending emails — if Microsoft credentials are configured in Settings, use Microsoft Graph API to send emails from the connected Microsoft account:
+
+- Daily report emails (currently using SendGrid) → can optionally use Outlook instead
+- Staff credential emails when new accounts are created
+- Lottery winner emails (as backup to WhatsApp)
+
+**Logic:** Check Settings → if `microsoft_client_id` is configured AND `sendgrid_api_key` is not configured → use Microsoft Graph for email. If both configured → use SendGrid (primary). If neither → skip email sends and log a warning.
+
+---
+
+### FEATURE 3 — LOTTERY MESSAGE IN DELIVERYMAN PORTAL
+
+When a delivery staff member has an order in "Delivered" status in their My Deliveries tab, show a **"Copy Thank You Message"** button on that order card.
+
+Clicking it copies this bilingual message to clipboard:
+
+```
+ቲጂ ምግብ ቤት ✨
+
+ምርጥ ምርጫዎ አድርገው ስለ ዘዘዙ እናመሰግናለን!
+ትዕዛዝዎ ተልኳል።
+የዕድል ቁጥርዎ: #[lucky_number]
+
+---
+
+TG's Restaurant ✨
+
+Thank you for ordering with us!
+Your food has been delivered. We hope you enjoy your meal!
+Your lucky number: #[lucky_number]
+
+🎯 Daily lottery draw happens at 10:00 PM. Good luck!
+```
+
+**Where `[lucky_number]` comes from:**
+- Pull from `lottery_entries` table where `order_id` matches this order
+- If no lucky number exists for this order → show the button greyed out with tooltip "Lucky number not generated yet"
+- If lucky number exists → button is active, clicking copies the full message with the real number inserted
+
+**UI placement:**
+- On the completed order card in My Deliveries tab → below the "Delivered ✅" status badge
+- Button text: "📋 Copy Lucky Number Message"
+- After copying: button text changes to "✅ Copied!" for 2 seconds then reverts
+- This replaces the need for the delivery staff to remember or look up the customer's lucky number — it's right there on the completed order
+
+---
+
+## TIER 3 — STABILITY & COMPLETENESS
+
+### STABILITY 1 — ALL PAGES MUST FULLY FUNCTION IN PRODUCTION
+
+Go through every page in the Admin Command Center and confirm it loads real data from the production API. Pages to verify:
+
+Dashboard · Orders · Kitchen (KDS) · Deliveries · Menu · Inventory · Finance · Payroll · Lottery · Staff · Branches · Customers · Order Queue · Addis Supply Chain · Audit & Reports · Settings
+
+For each page:
+- [ ] Loads without error
+- [ ] Shows real data (not empty/error state)
+- [ ] Create/Edit/Delete actions work and persist
+- [ ] Real-time updates work where applicable
+
+### STABILITY 2 — WORKER PORTALS IN PRODUCTION
+
+All four worker portals must function completely in production:
+
+**Chef Portal (`/chef`):**
+- [ ] Menu loads
+- [ ] Incoming orders appear in real time
+- [ ] Accept and Ready buttons work and update status
+- [ ] Chef status updates (preparing/available)
+
+**Delivery Portal (`/delivery`):**
+- [ ] Menu picker loads all items with correct categories
+- [ ] Relay Order form submits successfully and creates order
+- [ ] My Deliveries tab shows ready/assigned orders in real time
+- [ ] Pick Up / Deliver / Failed buttons work
+- [ ] "Copy Lucky Number Message" button appears on delivered orders
+
+**Addis Portal (`/addis`):**
+- [ ] Log Shipment form works and saves
+- [ ] Shipment history loads
+- [ ] Suppliers page works
+
+**Finance Portal (`/finance-portal`) — NEW:**
+- [ ] Log Entry form works for both income and expense
+- [ ] My Recent Entries table loads correctly
+- [ ] Summary shows correct daily totals
+
+### STABILITY 3 — PUSH EVERYTHING TO GITHUB AFTER ALL CHANGES
+
+After all fixes and features are implemented and verified:
+```bash
+git add .
+git commit -m "phase 7: production fixes, finance portal, Microsoft integration, lottery delivery message"
+git push origin main
+```
+
+Render will auto-deploy both services on push.
+
+---
+
+## VERIFICATION CHECKLIST
+
+**Production fixes:**
+- [ ] Socket.IO real-time works in production — test with two browser windows on the deployed URL (not localhost)
+- [ ] Menu loads in Delivery Portal on the deployed URL
+- [ ] Orders appear in Chef Portal on the deployed URL
+- [ ] Order timestamps (ordered/accepted/ready/delivered + elapsed times) show on order detail
+- [ ] All admin pages load without errors in production
+- [ ] No hardcoded `localhost` URLs remain in frontend source
+
+**Finance Portal:**
+- [ ] Finance staff can log in → redirected to `/finance-portal`
+- [ ] Log Entry form saves income and expense entries to DB
+- [ ] Admin Finance page shows finance staff entries in a dedicated section
+- [ ] Finance entries affect the P&L calculation correctly
+- [ ] Finance staff cannot access any other portal
+
+**Microsoft Integration:**
+- [ ] Microsoft settings tab appears in Settings page
+- [ ] Excel export downloads a real `.xlsx` file with formatted data
+- [ ] Teams notification fires when a new order is created (if webhook URL configured)
+- [ ] Teams notification fires when lottery draw completes
+
+**Lottery delivery message:**
+- [ ] "Copy Lucky Number Message" button appears on delivered orders in Delivery Portal
+- [ ] Clicking it copies the correct bilingual message with the real lucky number
+- [ ] Button shows "Copied!" feedback for 2 seconds
+
+---
+
+## FINAL INSTRUCTION TO REPLIT AGENT
+
+Build in this exact order:
+
+1. **Fix Socket.IO for production** (Fix 1) — this unblocks everything else
+2. **Fix CORS preflight OPTIONS handling** (Fix 2 Step 3)
+3. **Fix menu and kitchen queue API permissions** (Fix 2, Fix 3)
+4. **Add order timestamps** (Fix 4)
+5. **Fix all admin page errors** (Fix 5) — global error handler + localhost URL sweep
+6. **Run DB rebuild** (Fix 6)
+7. **Build Finance Portal** — schema, backend routes, frontend portal, admin integration
+8. **Microsoft Excel export** — install exceljs, add .xlsx endpoints, add buttons to Audit page
+9. **Microsoft Teams notifications** — Teams webhook function, wire to key events
+10. **Microsoft Outlook email** — Graph API email as SendGrid alternative
+11. **Lottery delivery message** — Copy button on delivered order cards in Delivery Portal
+12. **Full verification sweep** — test every checklist item above
+13. **Push to GitHub** — trigger Render auto-deploy
+
+Do not move to step 2 until step 1 is confirmed working in production (test on the actual render URLs, not localhost). Socket.IO is the foundation — everything else depends on it.

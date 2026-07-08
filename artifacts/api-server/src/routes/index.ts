@@ -19,6 +19,7 @@ import whatsappQueueRouter from "./whatsapp-queue";
 import addisRouter from "./addis";
 import cronStatusRouter from "./cron-status";
 import auditRouter from "./audit";
+import auditXlsxRouter from "./audit-xlsx";
 import settingsRouter from "./settings";
 
 const router: IRouter = Router();
@@ -57,6 +58,7 @@ router.use(restockRouter);
 router.use(activitiesRouter);
 router.use(cronStatusRouter);
 router.use(auditRouter);
+router.use(auditXlsxRouter);
 router.use(settingsRouter);
 
 export default router;

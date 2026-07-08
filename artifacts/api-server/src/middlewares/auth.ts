@@ -83,3 +83,4 @@ export const KITCHEN_ROLES = ["kitchen_staff", "super_admin", "branch_manager"];
 export const DELIVERY_ROLES = ["delivery_staff", "super_admin", "branch_manager"];
 export const ADDIS_ROLES = ["addis_staff", "super_admin"];
 export const ORDER_INTAKE_ROLES = ["order_staff", "super_admin", "branch_manager"];
+export const FINANCE_ROLES = ["finance_staff", "super_admin", "branch_manager"];

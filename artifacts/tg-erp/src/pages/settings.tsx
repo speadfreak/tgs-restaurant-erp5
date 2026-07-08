@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import {
   Settings, MessageSquare, Mail, Trophy, Globe, Shield,
-  Eye, EyeOff, Edit2, Check, X, Loader2, Wifi, TestTube
+  Eye, EyeOff, Edit2, Check, X, Loader2, Wifi, TestTube, Building2
 } from "lucide-react";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -37,6 +37,7 @@ const SECTIONS: { id: string; label: string; icon: React.ElementType }[] = [
   { id: "email", label: "Email", icon: Mail },
   { id: "lottery", label: "Lottery", icon: Trophy },
   { id: "addis", label: "Addis", icon: Globe },
+  { id: "microsoft", label: "Microsoft", icon: Building2 },
   { id: "system", label: "System", icon: Settings },
   { id: "security", label: "Security", icon: Shield },
 ];

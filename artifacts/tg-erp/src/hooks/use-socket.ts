@@ -14,7 +14,8 @@ function getSocket(): Socket {
   if (!_socket) {
     _socket = io(apiBase, {
       path: "/api/socket.io",
-      transports: ["polling", "websocket"],
+      // Prefer websocket first (less latency); fall back to polling (for proxies / strict firewalls)
+      transports: ["websocket", "polling"],
       autoConnect: false,
       reconnection: true,
       reconnectionAttempts: Infinity,

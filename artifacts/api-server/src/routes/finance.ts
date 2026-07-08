@@ -1,6 +1,6 @@
 import { Router } from "express";
-import { eq } from "drizzle-orm";
-import { db, expensesTable, ordersTable, commissionsTable, usersTable, settingsTable } from "@workspace/db";
+import { eq, and, gte } from "drizzle-orm";
+import { db, expensesTable, ordersTable, commissionsTable, usersTable, settingsTable, financeEntriesTable, branchesTable } from "@workspace/db";
 import {
   ListExpensesQueryParams,
   ListExpensesResponse,
@@ -12,7 +12,7 @@ import {
   GetRevenueTrendQueryParams,
   GetRevenueTrendResponse,
 } from "@workspace/api-zod";
-import { authenticate, requireRole, ADMIN_ROLES } from "../middlewares/auth";
+import { authenticate, requireRole, ADMIN_ROLES, FINANCE_ROLES } from "../middlewares/auth";
 
 const router: Router = Router();
 
@@ -58,6 +58,172 @@ router.get("/finance/commissions/mine", authenticate, async (req, res): Promise<
       createdAt: c.createdAt.toISOString(),
     })),
   });
+});
+
+// ── FINANCE ENTRIES — accessible to finance_staff + admin ────────────────────
+
+router.get("/finance/entries", authenticate, requireRole(...FINANCE_ROLES), async (req, res): Promise<void> => {
+  const isAdmin = ADMIN_ROLES.includes(req.user!.role);
+  const branchId = req.query.branchId ? parseInt(req.query.branchId as string, 10) : null;
+  const date = req.query.date as string | undefined;
+
+  let entries = await db.select().from(financeEntriesTable);
+
+  // finance_staff can only see their own branch
+  if (!isAdmin && req.user!.branchId) {
+    entries = entries.filter(e => e.branchId === req.user!.branchId);
+  } else if (branchId) {
+    entries = entries.filter(e => e.branchId === branchId);
+  }
+
+  if (date) {
+    entries = entries.filter(e => e.entryDate === date);
+  }
+
+  entries.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+
+  const allUsers = await db.select({ id: usersTable.id, name: usersTable.name }).from(usersTable);
+  const userMap = new Map(allUsers.map(u => [u.id, u.name]));
+
+  const allBranches = await db.select({ id: branchesTable.id, name: branchesTable.name }).from(branchesTable);
+  const branchMap = new Map(allBranches.map(b => [b.id, b.name]));
+
+  res.json(entries.map(e => ({
+    id: e.id,
+    branchId: e.branchId,
+    branchName: branchMap.get(e.branchId) ?? null,
+    loggedByUserId: e.loggedByUserId,
+    loggedByName: userMap.get(e.loggedByUserId) ?? null,
+    entryType: e.entryType,
+    category: e.category,
+    amountAed: Number(e.amountAed),
+    description: e.description,
+    referenceNumber: e.referenceNumber ?? null,
+    notes: e.notes ?? null,
+    entryDate: e.entryDate,
+    isLocked: e.isLocked,
+    createdAt: e.createdAt.toISOString(),
+    updatedAt: e.updatedAt.toISOString(),
+  })));
+});
+
+router.post("/finance/entries", authenticate, requireRole(...FINANCE_ROLES), async (req, res): Promise<void> => {
+  const { entryType, category, amountAed, description, referenceNumber, notes, entryDate, branchId: bodyBranchId } = req.body;
+  if (!entryType || !category || !amountAed || !description || !entryDate) {
+    res.status(400).json({ error: "Missing required fields: entryType, category, amountAed, description, entryDate" });
+    return;
+  }
+  if (!["income", "expense"].includes(entryType)) {
+    res.status(400).json({ error: "entryType must be 'income' or 'expense'" });
+    return;
+  }
+  const isAdmin = ADMIN_ROLES.includes(req.user!.role);
+  const effectiveBranchId: number = isAdmin && bodyBranchId
+    ? parseInt(bodyBranchId, 10)
+    : (req.user!.branchId ?? parseInt(bodyBranchId, 10));
+  if (!effectiveBranchId) { res.status(400).json({ error: "No branch available" }); return; }
+
+  const [entry] = await db.insert(financeEntriesTable).values({
+    branchId: effectiveBranchId,
+    loggedByUserId: req.user!.id,
+    entryType,
+    category,
+    amountAed: String(amountAed),
+    description,
+    referenceNumber: referenceNumber ?? null,
+    notes: notes ?? null,
+    entryDate,
+  }).returning();
+
+  res.status(201).json({
+    id: entry.id,
+    branchId: entry.branchId,
+    loggedByUserId: entry.loggedByUserId,
+    entryType: entry.entryType,
+    category: entry.category,
+    amountAed: Number(entry.amountAed),
+    description: entry.description,
+    referenceNumber: entry.referenceNumber ?? null,
+    notes: entry.notes ?? null,
+    entryDate: entry.entryDate,
+    isLocked: entry.isLocked,
+    createdAt: entry.createdAt.toISOString(),
+    updatedAt: entry.updatedAt.toISOString(),
+  });
+});
+
+router.patch("/finance/entries/:id", authenticate, requireRole(...FINANCE_ROLES), async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+
+  const [current] = await db.select().from(financeEntriesTable).where(eq(financeEntriesTable.id, id));
+  if (!current) { res.status(404).json({ error: "Entry not found" }); return; }
+  if (current.isLocked) { res.status(403).json({ error: "Entry is locked and cannot be edited" }); return; }
+
+  // Only allow editing within 24 hours for finance_staff (admins can always edit)
+  const isAdmin = ADMIN_ROLES.includes(req.user!.role);
+  const ageMs = Date.now() - current.createdAt.getTime();
+  if (!isAdmin && ageMs > 24 * 60 * 60 * 1000) {
+    res.status(403).json({ error: "Entry can only be edited within 24 hours" });
+    return;
+  }
+  // finance_staff cannot edit entries from other branches
+  if (!isAdmin && req.user!.branchId && current.branchId !== req.user!.branchId) {
+    res.status(403).json({ error: "Cannot edit entries from another branch" });
+    return;
+  }
+
+  const { entryType, category, amountAed, description, referenceNumber, notes, entryDate, isLocked } = req.body;
+  const updates: Partial<typeof financeEntriesTable.$inferInsert> = {};
+  if (entryType !== undefined) updates.entryType = entryType;
+  if (category !== undefined) updates.category = category;
+  if (amountAed !== undefined) updates.amountAed = String(amountAed);
+  if (description !== undefined) updates.description = description;
+  if (referenceNumber !== undefined) updates.referenceNumber = referenceNumber;
+  if (notes !== undefined) updates.notes = notes;
+  if (entryDate !== undefined) updates.entryDate = entryDate;
+  if (isAdmin && isLocked !== undefined) updates.isLocked = Boolean(isLocked);
+
+  const [updated] = await db.update(financeEntriesTable).set(updates).where(eq(financeEntriesTable.id, id)).returning();
+  res.json({ id: updated.id, ...updated, amountAed: Number(updated.amountAed) });
+});
+
+router.delete("/finance/entries/:id", authenticate, requireRole(...FINANCE_ROLES), async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+
+  const [current] = await db.select().from(financeEntriesTable).where(eq(financeEntriesTable.id, id));
+  if (!current) { res.status(404).json({ error: "Entry not found" }); return; }
+  if (current.isLocked) { res.status(403).json({ error: "Entry is locked and cannot be deleted" }); return; }
+
+  const isAdmin = ADMIN_ROLES.includes(req.user!.role);
+  // finance_staff can only delete within 1 hour
+  if (!isAdmin && Date.now() - current.createdAt.getTime() > 60 * 60 * 1000) {
+    res.status(403).json({ error: "Entry can only be deleted within 1 hour of creation" });
+    return;
+  }
+  if (!isAdmin && req.user!.branchId && current.branchId !== req.user!.branchId) {
+    res.status(403).json({ error: "Cannot delete entries from another branch" });
+    return;
+  }
+
+  await db.delete(financeEntriesTable).where(eq(financeEntriesTable.id, id));
+  res.json({ ok: true });
+});
+
+router.get("/finance/entries/summary", authenticate, requireRole(...FINANCE_ROLES), async (req, res): Promise<void> => {
+  const isAdmin = ADMIN_ROLES.includes(req.user!.role);
+  const branchId = req.query.branchId ? parseInt(req.query.branchId as string, 10) : (req.user!.branchId ?? null);
+  const date = (req.query.date as string) ?? new Date().toISOString().split("T")[0];
+
+  let entries = await db.select().from(financeEntriesTable).where(eq(financeEntriesTable.entryDate, date));
+  if (!isAdmin && branchId) entries = entries.filter(e => e.branchId === branchId);
+  else if (branchId) entries = entries.filter(e => e.branchId === branchId);
+
+  const totalIncome = entries.filter(e => e.entryType === "income").reduce((s, e) => s + Number(e.amountAed), 0);
+  const totalExpense = entries.filter(e => e.entryType === "expense").reduce((s, e) => s + Number(e.amountAed), 0);
+
+  res.json({ date, branchId, totalIncome, totalExpense, netBalance: totalIncome - totalExpense, entryCount: entries.length });
 });
 
 // ── ADMIN-ONLY MIDDLEWARE ────────────────────────────────────────────────────

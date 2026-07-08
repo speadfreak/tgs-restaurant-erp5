@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { eq, desc, and, or } from "drizzle-orm";
-import { db, ordersTable, orderItemsTable, customersTable, branchesTable, menuItemsTable, orderStatusHistoryTable, usersTable, lotteryEntriesTable, lotterySettingsTable, commissionsTable, settingsTable } from "@workspace/db";
+import { db, ordersTable, orderItemsTable, customersTable, branchesTable, menuItemsTable, orderStatusHistoryTable, usersTable, lotteryEntriesTable, lotterySettingsTable, commissionsTable, settingsTable, deliveriesTable } from "@workspace/db";
+import { sendTeamsNotification } from "../lib/teams";
 import { sendWhatsAppMessage } from "../lib/twilio";
 import {
   ListOrdersQueryParams,
@@ -36,17 +37,16 @@ function genOrderCode() {
 }
 
 async function buildOrderResponse(order: typeof ordersTable.$inferSelect) {
-  const items = await db.select().from(orderItemsTable).where(eq(orderItemsTable.orderId, order.id));
-  const customer = order.customerId
-    ? (await db.select().from(customersTable).where(eq(customersTable.id, order.customerId)))[0]
-    : null;
-  const branch = (await db.select().from(branchesTable).where(eq(branchesTable.id, order.branchId)))[0];
-  const relayedBy = order.relayedByUserId
-    ? (await db.select({ name: usersTable.name }).from(usersTable).where(eq(usersTable.id, order.relayedByUserId)))[0]
-    : null;
-  const assignedTo = order.assignedDeliveryUserId
-    ? (await db.select({ name: usersTable.name }).from(usersTable).where(eq(usersTable.id, order.assignedDeliveryUserId)))[0]
-    : null;
+  const [items, customer, branch, relayedBy, assignedTo, delivery, lotteryEntry] = await Promise.all([
+    db.select().from(orderItemsTable).where(eq(orderItemsTable.orderId, order.id)),
+    order.customerId ? db.select().from(customersTable).where(eq(customersTable.id, order.customerId)).then(r => r[0] ?? null) : null,
+    db.select().from(branchesTable).where(eq(branchesTable.id, order.branchId)).then(r => r[0] ?? null),
+    order.relayedByUserId ? db.select({ name: usersTable.name }).from(usersTable).where(eq(usersTable.id, order.relayedByUserId)).then(r => r[0] ?? null) : null,
+    order.assignedDeliveryUserId ? db.select({ name: usersTable.name }).from(usersTable).where(eq(usersTable.id, order.assignedDeliveryUserId)).then(r => r[0] ?? null) : null,
+    db.select().from(deliveriesTable).where(eq(deliveriesTable.orderId, order.id)).then(r => r[0] ?? null),
+    db.select({ luckyNumber: lotteryEntriesTable.luckyNumber }).from(lotteryEntriesTable).where(eq(lotteryEntriesTable.orderId, order.id)).then(r => r[0] ?? null),
+  ]);
+
   const nameMap = new Map<number, { nameEn: string; priceAed: string }>();
   for (const mi of await db.select().from(menuItemsTable)) {
     nameMap.set(mi.id, { nameEn: mi.nameEn, priceAed: String(mi.priceAed) });
@@ -71,7 +71,11 @@ async function buildOrderResponse(order: typeof ordersTable.$inferSelect) {
     assignedDeliveryName: assignedTo?.name ?? null,
     acceptedByUserId: order.acceptedByUserId ?? null,
     acceptedAt: order.acceptedAt?.toISOString() ?? null,
+    markedReadyAt: order.markedReadyAt?.toISOString() ?? null,
     claimedAt: order.claimedAt?.toISOString() ?? null,
+    pickedUpAt: delivery?.pickedUpAt?.toISOString() ?? null,
+    deliveredAt: delivery?.deliveredAt?.toISOString() ?? null,
+    luckyNumber: lotteryEntry?.luckyNumber ?? null,
     items: items.map(i => ({
       id: i.id,
       menuItemId: i.menuItemId,
@@ -81,6 +85,7 @@ async function buildOrderResponse(order: typeof ordersTable.$inferSelect) {
       notes: i.notes ?? null,
     })),
     createdAt: order.createdAt.toISOString(),
+    updatedAt: order.updatedAt.toISOString(),
   };
 }
 
@@ -386,8 +391,23 @@ router.get("/delivery/queue", authenticate, requireRole(...DELIVERY_ROLES), asyn
   const allUsers = await db.select({ id: usersTable.id, name: usersTable.name }).from(usersTable);
   const userMap = new Map(allUsers.map(u => [u.id, u.name]));
 
-  const enriched = await Promise.all(rows.slice(0, 100).map(async (order) => {
-    const items = await db.select().from(orderItemsTable).where(eq(orderItemsTable.orderId, order.id));
+  const sliced = rows.slice(0, 100);
+  const orderIds = sliced.map(o => o.id);
+
+  // Batch-fetch all items and lottery entries for the returned order set
+  const [allItems, allLotteryEntries] = await Promise.all([
+    orderIds.length ? db.select().from(orderItemsTable) : Promise.resolve([]),
+    orderIds.length ? db.select({ orderId: lotteryEntriesTable.orderId, luckyNumber: lotteryEntriesTable.luckyNumber }).from(lotteryEntriesTable) : Promise.resolve([]),
+  ]);
+  const itemsByOrder = new Map<number, typeof allItems>();
+  for (const i of allItems) {
+    if (!itemsByOrder.has(i.orderId)) itemsByOrder.set(i.orderId, []);
+    itemsByOrder.get(i.orderId)!.push(i);
+  }
+  const luckyByOrder = new Map(allLotteryEntries.filter(e => e.luckyNumber !== null).map(e => [e.orderId, e.luckyNumber]));
+
+  const enriched = await Promise.all(sliced.map(async (order) => {
+    const items = itemsByOrder.get(order.id) ?? [];
     const customer = order.customerId
       ? (await db.select().from(customersTable).where(eq(customersTable.id, order.customerId)))[0]
       : null;
@@ -403,6 +423,8 @@ router.get("/delivery/queue", authenticate, requireRole(...DELIVERY_ROLES), asyn
       assignedDeliveryUserId: order.assignedDeliveryUserId ?? null,
       staffName: order.assignedDeliveryUserId ? (userMap.get(order.assignedDeliveryUserId) ?? null) : null,
       claimedAt: order.claimedAt?.toISOString() ?? null,
+      markedReadyAt: order.markedReadyAt?.toISOString() ?? null,
+      luckyNumber: luckyByOrder.get(order.id) ?? null,
       items: items.map(i => ({ menuItemName: nameMap.get(i.menuItemId) ?? null, quantity: i.quantity })),
       totalAed: Number(order.totalAed),
       createdAt: order.createdAt.toISOString(),
@@ -493,6 +515,13 @@ router.post("/delivery/orders/:id/complete", authenticate, requireRole(...DELIVE
   }
   tryEmitTo(`branch:${order.branchId}:admin`, "order:status", { orderId: order.id, status: outcome, orderCode: order.orderCode, branchId: order.branchId });
   tryEmitTo(`order:${order.orderCode}`, "order:status_public", { status: outcome });
+  if (outcome === "delivered") {
+    const custName = order.customerNameDirect ?? `Customer #${order.customerId}`;
+    sendTeamsNotification(
+      `✅ Order Delivered — ${order.orderCode}`,
+      `${custName} · ${Number(order.totalAed).toFixed(2)} AED · Delivered by ${req.user!.name}`,
+    ).catch(() => { /* non-critical */ });
+  }
   res.json(await buildOrderResponse(order));
 });
 

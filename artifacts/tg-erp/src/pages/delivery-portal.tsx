@@ -24,8 +24,10 @@ interface DeliveryOrder {
   customerName: string | null; customerPhone: string | null; deliveryAddress: string | null;
   relayedByUserId: number | null; assignedDeliveryUserId: number | null;
   staffName: string | null; claimedAt: string | null;
+  markedReadyAt: string | null;
+  luckyNumber: number | null;
   items: { menuItemName: string | null; quantity: number }[];
-  totalAed: number; createdAt: string;
+  totalAed: number; createdAt: string; updatedAt?: string;
 }
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -122,10 +124,13 @@ export default function DeliveryPortal() {
     try {
       const params = new URLSearchParams();
       if (user?.branchId) params.set("branchId", String(user.branchId));
+      // includeHistory=true so we get delivered/failed orders for the lucky number copy feature
+      params.set("includeHistory", "true");
       const data: DeliveryOrder[] = await apiFetch(`/api/delivery/queue?${params}`);
       setOrders(data);
       const today = new Date().toDateString();
-      const todayDone = data.filter(o => o.status === "delivered" && new Date(o.createdAt).toDateString() === today);
+      const todayDone = data.filter(o => o.status === "delivered" && new Date(o.createdAt).toDateString() === today
+        && (o.assignedDeliveryUserId === user?.id || o.relayedByUserId === user?.id));
       setTodayStats({ completed: todayDone.length, commission: todayDone.length * 5 });
       const myReady = data.filter(o => o.status === "ready" && o.relayedByUserId === user?.id);
       if (myReady.length > prevReadyCountRef.current) playReadyAlert();
@@ -281,6 +286,8 @@ export default function DeliveryPortal() {
   const myOrders = orders.filter(o => o.relayedByUserId === user?.id || o.assignedDeliveryUserId === user?.id);
   const sharedPool = orders.filter(o => o.status === "ready" && !o.assignedDeliveryUserId && o.relayedByUserId !== user?.id);
   const active = myOrders.filter(o => !["delivered", "failed"].includes(o.status));
+  const recentlyDelivered = myOrders.filter(o => o.status === "delivered"
+    && new Date(o.createdAt).toDateString() === new Date().toDateString());
 
   if (isLoading) return (
     <div className="min-h-screen flex items-center justify-center" style={{ background: "hsl(0 0% 4%)" }}>
@@ -636,7 +643,57 @@ export default function DeliveryPortal() {
               </div>
             )}
 
-            {sharedPool.length === 0 && active.length === 0 && (
+            {/* ── TODAY'S DELIVERED ORDERS (lucky number copy) ── */}
+            {recentlyDelivered.length > 0 && (
+              <div className="space-y-2.5">
+                <h3 className="font-bold text-zinc-500 flex items-center gap-2 text-sm">
+                  <CheckCircle2 className="h-4 w-4 text-zinc-600" />Today's Delivered ({recentlyDelivered.length})
+                </h3>
+                {recentlyDelivered.map(order => {
+                  const hasLucky = order.luckyNumber !== null && order.luckyNumber !== undefined;
+                  const buildLuckyMsg = () => {
+                    const name = order.customerName ?? "Customer";
+                    const num = order.luckyNumber;
+                    return `🎉 ሰላም ${name}!\nእርስዎ ዛሬ ዕድለኛ ቁጥር ${num} ደርሷቸዋል!\nOrder: ${order.orderCode}\n\n🎉 Hi ${name}!\nYour lucky number today is ${num}!\nOrder: ${order.orderCode}`;
+                  };
+                  const copyLucky = async () => {
+                    try {
+                      await navigator.clipboard.writeText(buildLuckyMsg());
+                      toast({ title: "📋 Copied!", description: `Lucky number message for ${order.orderCode}` });
+                    } catch {
+                      toast({ title: "Copy failed", description: "Use long-press to copy manually", variant: "destructive" });
+                    }
+                  };
+                  return (
+                    <div key={order.id} className="queue-card opacity-75" style={{ borderLeftColor: "hsl(0 0% 25%)" }}>
+                      <div className="flex justify-between items-start mb-1.5">
+                        <div>
+                          <div className="code-text text-lg text-zinc-400">{order.orderCode}</div>
+                          <div className="text-sm text-zinc-500">{order.customerName}</div>
+                        </div>
+                        <div className="text-right">
+                          <StatusPill status={order.status} />
+                          <div className="text-xs text-zinc-600 mt-1">{order.totalAed} AED</div>
+                        </div>
+                      </div>
+                      {hasLucky && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="w-full h-8 text-xs font-bold border-amber-500/30 text-amber-400 hover:bg-amber-950/20"
+                          onClick={copyLucky}
+                        >
+                          <Star className="h-3 w-3 mr-1.5" />
+                          📋 Copy Lucky Number Message (#{order.luckyNumber})
+                        </Button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {sharedPool.length === 0 && active.length === 0 && recentlyDelivered.length === 0 && (
               loadingOrders ? (
                 <div className="text-center py-6 text-zinc-600 text-xs animate-pulse">Checking for orders...</div>
               ) : null

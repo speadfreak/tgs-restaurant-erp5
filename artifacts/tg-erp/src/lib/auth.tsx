@@ -16,6 +16,8 @@ function roleDefaultPath(role?: string): string {
   if (role === "kitchen_staff") return "/chef";
   if (role === "delivery_staff") return "/delivery";
   if (role === "addis_staff") return "/addis";
+  if (role === "finance_staff") return "/finance-portal";
+  if (role === "order_staff") return "/order-queue";
   return "/dashboard";
 }
 

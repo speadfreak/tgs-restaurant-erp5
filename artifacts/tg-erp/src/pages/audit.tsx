@@ -6,12 +6,12 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
-import { FileDown, ShieldCheck, ListChecks, Loader2, Users, TrendingUp, Package } from "lucide-react";
+import { FileDown, ShieldCheck, ListChecks, Loader2, Users, TrendingUp, Package, FileSpreadsheet } from "lucide-react";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 function getToken() { return localStorage.getItem("tg_erp_token"); }
 
-async function downloadCsv(path: string, filename: string) {
+async function downloadFile(path: string, filename: string) {
   const res = await fetch(`${BASE}${path}`, { headers: { Authorization: `Bearer ${getToken() ?? ""}` } });
   if (!res.ok) throw new Error(`${res.status}`);
   const blob = await res.blob();
@@ -24,6 +24,8 @@ async function downloadCsv(path: string, filename: string) {
   a.remove();
   URL.revokeObjectURL(url);
 }
+// Keep CSV alias for readability at call sites
+const downloadCsv = downloadFile;
 
 export default function AuditPage() {
   const { user } = useAuth();
@@ -38,55 +40,76 @@ export default function AuditPage() {
 
   const branchQuery = branchId ? `&branchId=${branchId}` : "";
 
-  const exportWeeklyRevenue = async () => {
-    setBusy("weekly");
+  const exportWeeklyRevenue = async (fmt: "csv" | "xlsx" = "csv") => {
+    setBusy(`weekly-${fmt}`);
     try {
-      await downloadCsv(`/api/audit/weekly-revenue?weekStart=${weekStart}${branchQuery}`, `weekly-revenue-${weekStart}.csv`);
-      toast({ title: "Export ready", description: "Weekly revenue report downloaded" });
+      if (fmt === "xlsx") {
+        await downloadFile(`/api/audit/weekly-revenue/xlsx?weekStart=${weekStart}${branchQuery}`, `weekly-revenue-${weekStart}.xlsx`);
+      } else {
+        await downloadCsv(`/api/audit/weekly-revenue?weekStart=${weekStart}${branchQuery}`, `weekly-revenue-${weekStart}.csv`);
+      }
+      toast({ title: "Export ready", description: `Weekly revenue downloaded (${fmt.toUpperCase()})` });
     } catch {
       toast({ title: "Export failed", variant: "destructive" });
     }
     setBusy(null);
   };
 
-  const exportStaffActivity = async () => {
-    setBusy("staff");
+  const exportStaffActivity = async (fmt: "csv" | "xlsx" = "csv") => {
+    setBusy(`staff-${fmt}`);
     try {
-      await downloadCsv(`/api/audit/staff-activity?date=${date}${branchQuery}`, `staff-activity-${date}.csv`);
-      toast({ title: "Export ready", description: "Staff activity report downloaded" });
+      if (fmt === "xlsx") {
+        await downloadFile(`/api/audit/staff-activity/xlsx?date=${date}${branchQuery}`, `staff-activity-${date}.xlsx`);
+      } else {
+        await downloadCsv(`/api/audit/staff-activity?date=${date}${branchQuery}`, `staff-activity-${date}.csv`);
+      }
+      toast({ title: "Export ready", description: `Staff activity downloaded (${fmt.toUpperCase()})` });
     } catch {
       toast({ title: "Export failed", variant: "destructive" });
     }
     setBusy(null);
   };
 
-  const exportInventory = async () => {
-    setBusy("inventory");
+  const exportInventory = async (fmt: "csv" | "xlsx" = "csv") => {
+    setBusy(`inventory-${fmt}`);
     try {
-      await downloadCsv(`/api/audit/inventory-report${branchQuery ? `?${branchQuery.slice(1)}` : ""}`, `inventory-report.csv`);
-      toast({ title: "Export ready", description: "Inventory report downloaded" });
+      const q = branchQuery ? `?${branchQuery.slice(1)}` : "";
+      if (fmt === "xlsx") {
+        await downloadFile(`/api/audit/inventory-report/xlsx${q}`, `inventory-report.xlsx`);
+      } else {
+        await downloadCsv(`/api/audit/inventory-report${q}`, `inventory-report.csv`);
+      }
+      toast({ title: "Export ready", description: `Inventory report downloaded (${fmt.toUpperCase()})` });
     } catch {
       toast({ title: "Export failed", variant: "destructive" });
     }
     setBusy(null);
   };
 
-  const exportDailyOrders = async () => {
-    setBusy("orders");
+  const exportDailyOrders = async (fmt: "csv" | "xlsx" = "csv") => {
+    setBusy(`orders-${fmt}`);
     try {
-      await downloadCsv(`/api/audit/daily-orders?date=${date}${branchQuery}`, `daily-order-audit-${date}.csv`);
-      toast({ title: "Export ready", description: "Daily order audit downloaded" });
+      if (fmt === "xlsx") {
+        await downloadFile(`/api/audit/daily-orders/xlsx?date=${date}${branchQuery}`, `daily-order-audit-${date}.xlsx`);
+      } else {
+        await downloadCsv(`/api/audit/daily-orders?date=${date}${branchQuery}`, `daily-order-audit-${date}.csv`);
+      }
+      toast({ title: "Export ready", description: `Daily order audit downloaded (${fmt.toUpperCase()})` });
     } catch {
       toast({ title: "Export failed", variant: "destructive" });
     }
     setBusy(null);
   };
 
-  const exportOrderHistory = async () => {
-    setBusy("history");
+  const exportOrderHistory = async (fmt: "csv" | "xlsx" = "csv") => {
+    setBusy(`history-${fmt}`);
     try {
-      await downloadCsv(`/api/audit/order-history?date=${date}${branchQuery}`, `order-history-audit-${date}.csv`);
-      toast({ title: "Export ready", description: "Order status history downloaded" });
+      if (fmt === "xlsx") {
+        await downloadFile(`/api/audit/order-history/xlsx?date=${date}${branchQuery}`, `order-history-${date}.xlsx`);
+      } else {
+        await downloadCsv(`/api/audit/order-history?date=${date}${branchQuery}`, `order-history-audit-${date}.csv`);
+      }
+      toast({ title: "Export ready", description: `Order status history downloaded (${fmt.toUpperCase()})` });
     } catch {
       toast({ title: "Export failed", variant: "destructive" });
     }
@@ -138,10 +161,16 @@ export default function AuditPage() {
             <p className="text-sm text-muted-foreground">
               One row per order: channel, customer, total, payment method, and who relayed/accepted/marked-ready/delivered it.
             </p>
-            <Button onClick={exportDailyOrders} disabled={busy !== null} className="w-full">
-              {busy === "orders" ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <FileDown className="h-4 w-4 mr-2" />}
-              Download CSV
-            </Button>
+            <div className="flex gap-2">
+              <Button onClick={() => exportDailyOrders("csv")} disabled={busy !== null} className="flex-1">
+                {busy === "orders-csv" ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <FileDown className="h-4 w-4 mr-2" />}
+                CSV
+              </Button>
+              <Button onClick={() => exportDailyOrders("xlsx")} disabled={busy !== null} variant="outline" className="flex-1 border-emerald-500/30 text-emerald-500 hover:bg-emerald-950/20">
+                {busy === "orders-xlsx" ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <FileSpreadsheet className="h-4 w-4 mr-2" />}
+                Excel
+              </Button>
+            </div>
           </CardContent>
         </Card>
 
@@ -153,10 +182,16 @@ export default function AuditPage() {
             <p className="text-sm text-muted-foreground">
               Full status-change trail: every transition, who changed it, and when — for full traceability.
             </p>
-            <Button onClick={exportOrderHistory} disabled={busy !== null} className="w-full" variant="outline">
-              {busy === "history" ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <FileDown className="h-4 w-4 mr-2" />}
-              Download CSV
-            </Button>
+            <div className="flex gap-2">
+              <Button onClick={() => exportOrderHistory("csv")} disabled={busy !== null} className="flex-1" variant="outline">
+                {busy === "history-csv" ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <FileDown className="h-4 w-4 mr-2" />}
+                CSV
+              </Button>
+              <Button onClick={() => exportOrderHistory("xlsx")} disabled={busy !== null} variant="outline" className="flex-1 border-emerald-500/30 text-emerald-500 hover:bg-emerald-950/20">
+                {busy === "history-xlsx" ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <FileSpreadsheet className="h-4 w-4 mr-2" />}
+                Excel
+              </Button>
+            </div>
           </CardContent>
         </Card>
 
@@ -168,10 +203,16 @@ export default function AuditPage() {
             <p className="text-sm text-muted-foreground">
               Day-by-day revenue breakdown for the selected week: totals, channel splits, and average order value.
             </p>
-            <Button onClick={exportWeeklyRevenue} disabled={busy !== null} className="w-full" variant="outline">
-              {busy === "weekly" ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <FileDown className="h-4 w-4 mr-2" />}
-              Download CSV
-            </Button>
+            <div className="flex gap-2">
+              <Button onClick={() => exportWeeklyRevenue("csv")} disabled={busy !== null} className="flex-1" variant="outline">
+                {busy === "weekly-csv" ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <FileDown className="h-4 w-4 mr-2" />}
+                CSV
+              </Button>
+              <Button onClick={() => exportWeeklyRevenue("xlsx")} disabled={busy !== null} variant="outline" className="flex-1 border-emerald-500/30 text-emerald-500 hover:bg-emerald-950/20">
+                {busy === "weekly-xlsx" ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <FileSpreadsheet className="h-4 w-4 mr-2" />}
+                Excel
+              </Button>
+            </div>
           </CardContent>
         </Card>
 
@@ -183,10 +224,16 @@ export default function AuditPage() {
             <p className="text-sm text-muted-foreground">
               Per-staff breakdown of relayed, prepared, and delivered orders for the selected date, with commission totals.
             </p>
-            <Button onClick={exportStaffActivity} disabled={busy !== null} className="w-full" variant="outline">
-              {busy === "staff" ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <FileDown className="h-4 w-4 mr-2" />}
-              Download CSV
-            </Button>
+            <div className="flex gap-2">
+              <Button onClick={() => exportStaffActivity("csv")} disabled={busy !== null} className="flex-1" variant="outline">
+                {busy === "staff-csv" ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <FileDown className="h-4 w-4 mr-2" />}
+                CSV
+              </Button>
+              <Button onClick={() => exportStaffActivity("xlsx")} disabled={busy !== null} variant="outline" className="flex-1 border-emerald-500/30 text-emerald-500 hover:bg-emerald-950/20">
+                {busy === "staff-xlsx" ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <FileSpreadsheet className="h-4 w-4 mr-2" />}
+                Excel
+              </Button>
+            </div>
           </CardContent>
         </Card>
 
@@ -198,10 +245,16 @@ export default function AuditPage() {
             <p className="text-sm text-muted-foreground">
               Current stock levels vs reorder thresholds — highlights items below reorder point for immediate action.
             </p>
-            <Button onClick={exportInventory} disabled={busy !== null} className="w-full" variant="outline">
-              {busy === "inventory" ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <FileDown className="h-4 w-4 mr-2" />}
-              Download CSV
-            </Button>
+            <div className="flex gap-2">
+              <Button onClick={() => exportInventory("csv")} disabled={busy !== null} className="flex-1" variant="outline">
+                {busy === "inventory-csv" ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <FileDown className="h-4 w-4 mr-2" />}
+                CSV
+              </Button>
+              <Button onClick={() => exportInventory("xlsx")} disabled={busy !== null} variant="outline" className="flex-1 border-emerald-500/30 text-emerald-500 hover:bg-emerald-950/20">
+                {busy === "inventory-xlsx" ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <FileSpreadsheet className="h-4 w-4 mr-2" />}
+                Excel
+              </Button>
+            </div>
           </CardContent>
         </Card>
       </div>
