@@ -1,0 +1,255 @@
+# SURGICAL FIX — Production API Issues
+### (ቲጂ ምግብ ቤት — Replit Agent)
+
+Five specific problems confirmed from live production screenshots. Fix each one exactly as described. Do not touch anything else.
+
+---
+
+## PROBLEM 1 — CHEF PORTAL SHOWS 0 ORDERS BUT ADMIN KITCHEN SHOWS 4
+
+### Evidence
+Admin Kitchen page shows orders: TGMR1P1463 (1171m), TGPWCW6359 (1112m), TGUCZR5578 (437m), TGDPQQ1039. Chef Portal (Meron Tadesse) shows "No new orders."
+
+### Root cause
+The kitchen queue API endpoint (`GET /api/kitchen/queue`) almost certainly has a time-based filter — e.g. `WHERE created_at > NOW() - INTERVAL '24 hours'` or `WHERE created_at::date = CURRENT_DATE`. The seeded demo orders are days old so they pass the admin view (which has no date filter) but fail the kitchen queue filter.
+
+Additionally, the chef portal may be sending `?branchId=X` in the query and getting back empty if her `branch_id` in the JWT doesn't match the orders' `branch_id`.
+
+### Fix
+
+**Step 1 — Find and remove the date filter from the kitchen queue:**
+
+In `artifacts/api-server/src/routes/orders.ts` (or wherever the kitchen queue handler is), find the query for kitchen queue. Look for any of these patterns and REMOVE the date restriction:
+```typescript
+// REMOVE any of these:
+gte(orders.createdAt, new Date(Date.now() - 24 * 60 * 60 * 1000))
+orders.createdAt > today
+created_at::date = CURRENT_DATE
+```
+
+The kitchen queue must show ALL orders with status `pending_acceptance` or `preparing` — regardless of when they were created. An order from yesterday that was never accepted must still appear.
+
+**Step 2 — Fix branch scoping:**
+
+The kitchen queue query must use `req.user.branchId` as the branch filter (from the verified JWT), NOT from `req.query.branchId`. Change to:
+
+```typescript
+const branchId = (req as any).user?.branchId;
+// Use branchId from JWT — ignore any query param branchId
+const queue = await db.query.orders.findMany({
+  where: and(
+    branchId ? eq(orders.branchId, branchId) : undefined,
+    inArray(orders.status, ['pending_acceptance', 'preparing'])
+  ),
+  orderBy: asc(orders.createdAt),
+  with: { items: { with: { menuItem: true } } }
+});
+```
+
+**Step 3 — Verify chef's branch_id in the database:**
+
+Run this SQL against the Neon database:
+```sql
+SELECT id, name, role, branch_id FROM users WHERE role = 'chef';
+SELECT id, name, role, branch_id FROM users WHERE role = 'delivery_staff';
+SELECT id, branch_id FROM orders WHERE status IN ('pending_acceptance', 'preparing');
+```
+
+The `branch_id` on the chef user MUST match the `branch_id` on the orders. If they don't match → either update the chef's branch_id or update the orders' branch_id to match.
+
+If you cannot run SQL directly, add a temporary debug endpoint:
+```typescript
+router.get('/debug/kitchen-check', authenticate, async (req, res) => {
+  const user = (req as any).user;
+  const allOrders = await db.select().from(orders).where(
+    inArray(orders.status, ['pending_acceptance', 'preparing'])
+  );
+  res.json({ 
+    userBranchId: user.branchId, 
+    userRole: user.role,
+    ordersFound: allOrders.map(o => ({ id: o.id, branchId: o.branchId, status: o.status }))
+  });
+});
+```
+Call it as the chef user and compare `userBranchId` with `ordersFound[].branchId`.
+
+---
+
+## PROBLEM 2 — DELIVERY PORTAL MENU NOT LOADING ("Loading menu..." stuck)
+
+### Root cause
+The Chef Portal screenshot shows "Loading menu..." stuck indefinitely. This means the menu API call is either:
+- Returning a non-200 response that the frontend isn't handling (stuck in loading state)
+- The `VITE_API_URL` is not being used for this specific call
+
+### Fix
+
+**Step 1 — Find the menu fetch in chef portal and delivery portal:**
+Search for where menu items are fetched in:
+- `artifacts/tg-erp/src/pages/chef-portal.tsx`
+- `artifacts/tg-erp/src/pages/delivery-portal.tsx`
+
+Look for the fetch call URL. If it's using a relative URL like `/api/menu/items` without the base URL prepended → in production this hits the frontend static server (which has no API) and gets a 404, causing infinite loading.
+
+**Fix:** Every API call in the frontend must use the configured base URL:
+```typescript
+// Wrong — relative URL, fails in production:
+const res = await fetch('/api/menu/items');
+
+// Correct — uses the API client with base URL:
+const res = await apiClient.get('/menu/items');
+// OR:
+const baseUrl = import.meta.env.VITE_API_URL || '';
+const res = await fetch(`${baseUrl}/api/menu/items`, {
+  headers: { Authorization: `Bearer ${token}` }
+});
+```
+
+**Step 2 — Check the menu endpoint middleware:**
+Confirm `GET /api/menu/items` and `GET /api/menu/categories` use `requireAuth` (not `requireRole`) so chefs and delivery staff can read them:
+```typescript
+router.get('/items', requireAuth, async (req, res) => { ... })
+router.get('/categories', requireAuth, async (req, res) => { ... })
+```
+
+---
+
+## PROBLEM 3 — SETTINGS PAGE SHOWS "No settings in this section"
+
+### Root cause
+The Settings page WhatsApp tab shows the Test Connection section but then "No settings in this section" for all the actual settings fields. This means the settings API is returning an empty array or the frontend is not finding the expected setting keys.
+
+### Fix
+
+**Step 1 — Check the settings API response:**
+The settings are stored in a `settings` table (or defined as `SETTING_DEFAULTS` in the settings route). Find this in `artifacts/api-server/src/routes/` — look for a settings route file.
+
+Check: are the default setting keys being initialized in the database? If the `settings` table is empty (fresh Neon DB after seed), the GET endpoint may return `[]` and the frontend shows nothing.
+
+**Fix — ensure settings are initialized on first fetch:**
+In the settings GET handler, if a key doesn't exist in the DB, return the default value:
+```typescript
+// For each expected key, if not in DB, return default:
+const defaults = {
+  twilio_account_sid: '',
+  twilio_auth_token: '',
+  twilio_whatsapp_from: '',
+  whatsapp_sandbox_mode: 'false',
+  webhook_verification_token: generateToken(), // auto-generate if missing
+  auto_reply_template_en: 'Hello! Your queue number is {{queue_number}}.',
+  auto_reply_template_am: 'ሰላም! የሰልፍ ቁጥርዎ {{queue_number}} ነው።',
+  // ... all other expected keys
+};
+```
+
+**Step 2 — Check SETTINGS_ENCRYPTION_KEY in Render:**
+If `SETTINGS_ENCRYPTION_KEY` is not set in Render's environment variables, the settings encryption/decryption will fail and the route may crash silently, returning no settings.
+
+Go to Render → API service → Environment → confirm `SETTINGS_ENCRYPTION_KEY` is set to a 32-character string. If missing, add it. The API service will redeploy automatically.
+
+---
+
+## PROBLEM 4 — STAFF EARNINGS SHOWS "Could not load earnings data"
+
+### Root cause
+The Staff Earnings / Payroll page is failing to load. Either the API endpoint doesn't exist, returns 500, or the frontend is calling the wrong URL.
+
+### Fix
+
+**Step 1 — Find the earnings/payroll API endpoint:**
+Search for the route that handles staff earnings/commissions. It's likely:
+- `GET /api/payroll/commissions`
+- `GET /api/users/:id/performance`  
+- `GET /api/commissions`
+
+**Step 2 — Check if the commissions table has data:**
+The seeded data may not include commission records. Add commission seeding:
+```typescript
+// In seed.ts, after seeding orders, add sample commissions:
+await db.insert(commissions).values([
+  { userId: deliveryStaffId, orderId: sampleOrderId, amountAed: '15.00', type: 'delivery', createdAt: new Date() },
+]).onConflictDoNothing();
+```
+
+**Step 3 — Fix the frontend error handling:**
+The earnings page should show an empty state instead of "Could not load" when there are no commissions yet:
+```typescript
+if (error) return <p className="text-zinc-400">No earnings data yet — commissions appear here after deliveries are completed.</p>
+if (!data || data.length === 0) return <p className="text-zinc-400">No earnings recorded for this period.</p>
+```
+
+---
+
+## PROBLEM 5 — CRON JOB MONITOR SHOWS "Could not load cron status"
+
+### Root cause
+The cron status endpoint is failing. Either:
+- The endpoint URL is wrong in the frontend
+- The endpoint requires super_admin role but the user making the request isn't authenticated properly
+- The cron status data structure doesn't match what the frontend expects
+
+### Fix
+
+**Step 1 — Find the cron status endpoint:**
+Look for `GET /api/cron-status` or similar in the routes. Check its middleware — it should be `requireRole('super_admin')`.
+
+**Step 2 — Confirm the endpoint returns the expected structure:**
+The frontend expects something like:
+```json
+[
+  { "name": "Daily Lottery Draw", "schedule": "Daily at 22:00 UAE", "lastRun": "...", "status": "success", "message": "..." },
+  ...
+]
+```
+
+If the endpoint returns a different structure or crashes → fix the handler to return a safe default even if no cron logs exist yet:
+```typescript
+router.get('/status', requireRole('super_admin', 'branch_manager'), async (req, res) => {
+  try {
+    // Return cron job definitions with last run status if available
+    const jobs = [
+      { name: 'Daily Lottery Draw', schedule: 'Daily at 22:00 UAE (18:00 UTC)', lastRun: null, status: 'scheduled' },
+      { name: 'Lucky Number Retry', schedule: 'Every 15 minutes', lastRun: null, status: 'scheduled' },
+      { name: 'Queue Reset', schedule: 'Daily at midnight UAE', lastRun: null, status: 'scheduled' },
+      { name: 'Import Overdue Check', schedule: 'Daily at 09:00 UAE', lastRun: null, status: 'scheduled' },
+    ];
+    res.json(jobs);
+  } catch (err) {
+    res.status(500).json({ error: 'Could not load cron status' });
+  }
+});
+```
+
+---
+
+## AFTER ALL FIXES — REBUILD AND PUSH
+
+```bash
+# Build both
+pnpm run build:api
+pnpm run build:web
+
+# If both succeed:
+git add .
+git commit -m "fix: production API issues - kitchen queue, menu, settings, earnings, cron status"
+git push origin main
+```
+
+Then run seed on Neon from Replit Shell:
+```bash
+DATABASE_URL=$NEON_DATABASE_URL pnpm run db:seed
+```
+
+---
+
+## VERIFICATION
+
+After Render redeploys (3-5 min after push):
+
+- [ ] Open Chef Portal as Meron → orders from admin Kitchen page appear
+- [ ] Open Delivery Portal as Solomon → menu items load in Relay Order tab
+- [ ] Open Settings as Super Admin → WhatsApp section shows all setting fields (Twilio SID, Auth Token, etc.)
+- [ ] Open Staff/Payroll Earnings → shows empty state message instead of error
+- [ ] Open Staff page → Cron Job Monitor loads (even if showing "No runs yet")
+
+Report exactly which ones pass and which still fail after the fix.
