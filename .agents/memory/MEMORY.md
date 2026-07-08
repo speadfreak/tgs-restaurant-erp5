@@ -5,3 +5,4 @@
 - [Render deployment layout](render-deployment.md) — frontend outDir is dist/public (not dist); backend entry is dist/index.mjs; CORS must fail closed in prod when FRONTEND_URL unset.
 - [Finance entries auth](finance-entries-auth.md) — finance_staff with null branchId must be 403'd; branch scope is enforced server-side not via query params.
 - [Express 5 OPTIONS wildcard](express5-options.md) — app.options('*', cors()) works in Express 5.2.1 without issue; seed: tables without unique constraints need existence checks, not bare onConflictDoNothing.
+- [Express router mount-order role gate bug](express-router-path-scoping.md) — router.use(authenticate, requireRole(...)) with no path arg leaks its gate onto later-mounted sibling routers.

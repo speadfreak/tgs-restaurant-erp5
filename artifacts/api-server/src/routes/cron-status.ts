@@ -10,7 +10,7 @@ import {
 import { authenticate, requireRole, ADMIN_ROLES } from "../middlewares/auth";
 
 const router: Router = Router();
-router.use(authenticate, requireRole(...ADMIN_ROLES));
+router.use("/cron-jobs", authenticate, requireRole(...ADMIN_ROLES));
 
 const JOB_DEFS = [
   { name: "daily_lottery_draw",  label: "Daily Lottery Draw",   schedule: "Daily at 22:00 UAE (18:00 UTC)", icon: "🎰" },

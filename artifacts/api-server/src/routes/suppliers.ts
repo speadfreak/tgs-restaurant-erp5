@@ -4,7 +4,7 @@ import { db, suppliersTable } from "@workspace/db";
 import { authenticate, requireRole, ADMIN_ROLES } from "../middlewares/auth";
 
 const router: Router = Router();
-router.use(authenticate, requireRole(...ADMIN_ROLES));
+router.use("/suppliers", authenticate, requireRole(...ADMIN_ROLES));
 
 router.get("/suppliers", async (req, res): Promise<void> => {
   const branchId = req.query.branchId ? parseInt(req.query.branchId as string, 10) : null;

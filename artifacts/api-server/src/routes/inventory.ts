@@ -19,7 +19,7 @@ import { getIO } from "../lib/socket";
 import { authenticate, requireRole, ADMIN_ROLES } from "../middlewares/auth";
 
 const router: Router = Router();
-router.use(authenticate, requireRole(...ADMIN_ROLES));
+router.use("/inventory", authenticate, requireRole(...ADMIN_ROLES));
 
 function tryEmitTo(room: string, event: string, data: unknown) {
   try { getIO().to(room).emit(event, data); } catch { /* ignore */ }

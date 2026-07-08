@@ -271,8 +271,12 @@ router.get("/orders/:id/history", authenticate, requireRole(...ADMIN_ROLES, ...O
 router.get("/kitchen/queue", authenticate, requireRole(...KITCHEN_ROLES), async (req, res): Promise<void> => {
   const q = GetKitchenQueueQueryParams.safeParse(req.query);
   if (!q.success) { res.status(400).json({ error: q.error.message }); return; }
-  // Fall back to the authenticated user's own branch when no branchId query param is given
-  const effectiveBranchId = q.data.branchId ?? req.user?.branchId ?? null;
+  // Kitchen staff are locked to their own branch (ignore any client-supplied branchId).
+  // Admin/branch-manager roles may pass a branchId query param to inspect other branches.
+  const isKitchenStaff = req.user?.role === "kitchen_staff";
+  const effectiveBranchId = isKitchenStaff
+    ? req.user?.branchId ?? null
+    : (q.data.branchId ?? req.user?.branchId ?? null);
   const activeStatuses = ["pending", "confirmed", "preparing", "pending_acceptance"];
   let rows = await db.select().from(ordersTable).orderBy(ordersTable.createdAt);
   rows = rows.filter(o => activeStatuses.includes(o.status));

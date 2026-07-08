@@ -13,7 +13,7 @@ import { sendWhatsAppMessage } from "../lib/twilio";
 import { authenticate, requireRole, ADMIN_ROLES } from "../middlewares/auth";
 
 const router: Router = Router();
-router.use(authenticate, requireRole(...ADMIN_ROLES));
+router.use("/lottery", authenticate, requireRole(...ADMIN_ROLES));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ENTRIES

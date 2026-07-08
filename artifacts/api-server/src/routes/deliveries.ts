@@ -15,7 +15,7 @@ import {
 import { authenticate, requireRole, ADMIN_ROLES, DELIVERY_ROLES } from "../middlewares/auth";
 
 const router: Router = Router();
-router.use(authenticate, requireRole(...ADMIN_ROLES, ...DELIVERY_ROLES));
+router.use("/deliveries", authenticate, requireRole(...ADMIN_ROLES, ...DELIVERY_ROLES));
 
 async function buildDelivery(d: typeof deliveriesTable.$inferSelect) {
   const order = (await db.select().from(ordersTable).where(eq(ordersTable.id, d.orderId)))[0];

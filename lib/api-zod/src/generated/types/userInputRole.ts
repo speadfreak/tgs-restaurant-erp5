@@ -16,4 +16,5 @@ export const UserInputRole = {
   delivery_staff: 'delivery_staff',
   order_staff: 'order_staff',
   addis_staff: 'addis_staff',
+  finance_staff: 'finance_staff',
 } as const;

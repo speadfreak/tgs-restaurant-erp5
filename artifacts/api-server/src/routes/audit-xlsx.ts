@@ -10,7 +10,7 @@ import { authenticate, requireRole, ADMIN_ROLES } from "../middlewares/auth";
 import ExcelJS from "exceljs";
 
 const router: Router = Router();
-router.use(authenticate, requireRole(...ADMIN_ROLES));
+router.use("/audit", authenticate, requireRole(...ADMIN_ROLES));
 
 /** Apply TG amber header style to the first row of a worksheet. */
 function styleHeader(ws: ExcelJS.Worksheet) {

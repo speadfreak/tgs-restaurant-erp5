@@ -15,7 +15,7 @@ import {
 import { authenticate, requireRole, ADMIN_ROLES, ORDER_INTAKE_ROLES, DELIVERY_ROLES } from "../middlewares/auth";
 
 const router: Router = Router();
-router.use(authenticate, requireRole(...ADMIN_ROLES, ...ORDER_INTAKE_ROLES, ...DELIVERY_ROLES));
+router.use("/customers", authenticate, requireRole(...ADMIN_ROLES, ...ORDER_INTAKE_ROLES, ...DELIVERY_ROLES));
 
 async function buildCustomer(c: typeof customersTable.$inferSelect) {
   const orders = await db.select().from(ordersTable).where(eq(ordersTable.customerId, c.id));

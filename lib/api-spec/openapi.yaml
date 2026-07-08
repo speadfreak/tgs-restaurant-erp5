@@ -1431,7 +1431,7 @@ components:
           type: ["string", "null"]
         role:
           type: string
-          enum: [super_admin, branch_manager, kitchen_staff, delivery_staff, order_staff, addis_staff]
+          enum: [super_admin, branch_manager, kitchen_staff, delivery_staff, order_staff, addis_staff, finance_staff]
         branchId:
           type: ["integer", "null"]
         baseSalary:
@@ -1455,7 +1455,7 @@ components:
           type: string
         role:
           type: string
-          enum: [super_admin, branch_manager, kitchen_staff, delivery_staff, order_staff, addis_staff]
+          enum: [super_admin, branch_manager, kitchen_staff, delivery_staff, order_staff, addis_staff, finance_staff]
         branchId:
           type: integer
         baseSalary:

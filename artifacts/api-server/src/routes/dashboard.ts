@@ -15,7 +15,7 @@ import {
 import { authenticate, requireRole, ADMIN_ROLES } from "../middlewares/auth";
 
 const router: Router = Router();
-router.use(authenticate, requireRole(...ADMIN_ROLES));
+router.use("/dashboard", authenticate, requireRole(...ADMIN_ROLES));
 
 router.get("/dashboard/summary", async (req, res): Promise<void> => {
   const q = GetDashboardSummaryQueryParams.safeParse(req.query);

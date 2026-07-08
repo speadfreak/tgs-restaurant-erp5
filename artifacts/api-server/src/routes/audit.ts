@@ -4,7 +4,7 @@ import { db, ordersTable, orderStatusHistoryTable, usersTable, branchesTable, cu
 import { authenticate, requireRole, ADMIN_ROLES } from "../middlewares/auth";
 
 const router: Router = Router();
-router.use(authenticate, requireRole(...ADMIN_ROLES));
+router.use("/audit", authenticate, requireRole(...ADMIN_ROLES));
 
 function csvEscape(value: unknown): string {
   const s = value === null || value === undefined ? "" : String(value);

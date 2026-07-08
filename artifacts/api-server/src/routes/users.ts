@@ -17,7 +17,7 @@ import {
 import { authenticate, requireRole, ADMIN_ROLES } from "../middlewares/auth";
 
 const router: Router = Router();
-router.use(authenticate, requireRole(...ADMIN_ROLES));
+router.use("/users", authenticate, requireRole(...ADMIN_ROLES));
 
 function mapUser(u: typeof usersTable.$inferSelect) {
   return {

@@ -19,7 +19,7 @@ import {
 import { authenticate, requireRole, ADMIN_ROLES } from "../middlewares/auth";
 
 const router: Router = Router();
-router.use(authenticate, requireRole(...ADMIN_ROLES));
+router.use("/payroll", authenticate, requireRole(...ADMIN_ROLES));
 
 function mapTimesheet(t: typeof timesheetsTable.$inferSelect, userName?: string | null) {
   const clockIn = t.clockIn.getTime();

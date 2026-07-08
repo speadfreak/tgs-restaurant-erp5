@@ -246,7 +246,7 @@ router.get("/finance/entries/summary", authenticate, requireRole(...FINANCE_ROLE
 });
 
 // ── ADMIN-ONLY MIDDLEWARE ────────────────────────────────────────────────────
-router.use(authenticate, requireRole(...ADMIN_ROLES));
+router.use("/finance", authenticate, requireRole(...ADMIN_ROLES));
 
 function mapExpense(e: typeof expensesTable.$inferSelect, loggedByName?: string | null) {
   return {

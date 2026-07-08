@@ -6,7 +6,7 @@ import { authenticate, requireRole } from "../middlewares/auth";
 import { getSetting, setSetting, getAllSettings, maskValue } from "../lib/settings";
 
 const router: Router = Router();
-router.use(authenticate, requireRole("super_admin"));
+router.use("/settings", authenticate, requireRole("super_admin"));
 
 const SENSITIVE_KEYS = new Set([
   "twilio_account_sid",
