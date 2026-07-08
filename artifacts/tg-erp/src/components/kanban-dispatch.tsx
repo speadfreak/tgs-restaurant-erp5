@@ -4,6 +4,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useSocket } from "@/hooks/use-socket";
 import { useAuth } from "@/lib/auth";
 import { Clock, Package, Truck, CheckCircle2, XCircle, GripVertical } from "lucide-react";
+import { getApiBase } from "@/lib/api-base";
 
 interface KanbanOrder {
   id: number; orderCode: string; status: string; channel: string;
@@ -20,7 +21,7 @@ const COLUMNS = [
   { key: "failed",          label: "Failed",            icon: XCircle,      color: "text-red-400",    border: "border-red-900/40",   bg: "bg-red-950/10" },
 ];
 
-const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+const BASE = getApiBase();
 function getToken() { return localStorage.getItem("tg_erp_token"); }
 async function apiFetch(path: string, method = "GET", body?: unknown) {
   const res = await fetch(`${BASE}${path}`, {

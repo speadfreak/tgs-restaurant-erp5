@@ -10,6 +10,7 @@ import {
   Globe, Package, Plus, ChevronDown, ChevronUp,
   AlertCircle, CheckCircle, Loader2, DollarSign, Truck, RefreshCw
 } from "lucide-react";
+import { getApiBase } from "@/lib/api-base";
 
 interface Branch { id: number; name: string }
 interface SupplierAddis { id: number; name: string; contactPhone: string | null; contactEmail: string | null; addressEthiopia: string | null; active: boolean }
@@ -23,7 +24,7 @@ interface ImportShipment {
 }
 interface Payment { amountAed: string; paymentDate: string; paymentMethod: string; notes: string }
 
-const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+const BASE = getApiBase();
 function getToken() { return localStorage.getItem("tg_erp_token"); }
 async function apiFetch(path: string, method = "GET", body?: unknown) {
   const res = await fetch(`${BASE}${path}`, {

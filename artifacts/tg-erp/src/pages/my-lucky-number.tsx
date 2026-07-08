@@ -3,8 +3,9 @@ import { Trophy, Phone, Search, Star, Sparkles } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import logoUrl from "@assets/ChatGPT_Image_Jun_30,_2026,_07_44_15_AM_1782796152927.png";
+import { getApiBase } from "@/lib/api-base";
 
-const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+const BASE = getApiBase();
 
 interface LuckyEntry {
   id: number;

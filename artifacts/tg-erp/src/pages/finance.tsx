@@ -18,8 +18,9 @@ import { DollarSign, TrendingUp, TrendingDown, Receipt, Plus, Trash2, Globe, Che
 import { format } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
+import { getApiBase } from "@/lib/api-base";
 
-const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+const BASE = getApiBase();
 function getToken() { return localStorage.getItem("tg_erp_token"); }
 async function apiFetch(path: string, opts?: RequestInit) {
   const res = await fetch(`${BASE}${path}`, {

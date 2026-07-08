@@ -4,13 +4,14 @@ import { Badge } from "@/components/ui/badge";
 import { CheckCircle2, ClipboardList, Clock } from "lucide-react";
 import { format } from "date-fns";
 import { useAuth } from "@/lib/auth";
+import { getApiBase } from "@/lib/api-base";
 
 interface Activity {
   id: number; title: string; dueDate: string | null; status: string;
   assignedByName: string | null; relatedEntityType: string | null; relatedEntityId: number | null;
 }
 
-const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+const BASE = getApiBase();
 function getToken() { return localStorage.getItem("tg_erp_token"); }
 async function apiFetch(path: string, method = "GET", body?: unknown) {
   const res = await fetch(`${BASE}${path}`, {

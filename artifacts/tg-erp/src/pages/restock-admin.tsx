@@ -9,6 +9,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
 import { Package, Plus, CheckCircle2, Truck, Clock, Building2 } from "lucide-react";
 import { format } from "date-fns";
+import { getApiBase } from "@/lib/api-base";
 
 interface Supplier { id: number; name: string; phone: string | null; branchId: number }
 interface InventoryItem { id: number; name: string; unit: string; quantityOnHand: number; reorderThreshold: number; reorderQuantity: number; preferredSupplierId: number | null; branchId: number }
@@ -19,7 +20,7 @@ interface RestockOrder {
   notes: string | null; approvedAt: string | null; receivedAt: string | null; createdAt: string;
 }
 
-const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+const BASE = getApiBase();
 function getToken() { return localStorage.getItem("tg_erp_token"); }
 async function apiFetch(path: string, method = "GET", body?: unknown) {
   const res = await fetch(`${BASE}${path}`, {

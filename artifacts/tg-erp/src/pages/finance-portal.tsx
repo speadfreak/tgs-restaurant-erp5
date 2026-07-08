@@ -16,6 +16,7 @@ import {
   ArrowUpCircle, ArrowDownCircle, RefreshCw, Receipt,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { getApiBase } from "@/lib/api-base";
 
 interface FinanceEntry {
   id: number;
@@ -41,7 +42,7 @@ interface Summary {
   entryCount: number;
 }
 
-const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+const BASE = getApiBase();
 function getToken() { return localStorage.getItem("tg_erp_token"); }
 async function apiFetch(path: string, method = "GET", body?: unknown) {
   const res = await fetch(`${BASE}${path}`, {

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { ChefHat, Clock, LogOut, Wifi, WifiOff, Bell, Eye, EyeOff } from "lucide-react";
 import { MyTasks } from "@/components/my-tasks";
+import { getApiBase } from "@/lib/api-base";
 
 interface OrderItem { menuItemName: string | null; quantity: number; unitPrice: number; notes: string | null }
 interface KitchenTicket {
@@ -17,7 +18,7 @@ interface KitchenTicket {
 }
 interface MenuItem86 { id: number; nameEn: string; available: boolean }
 
-const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+const BASE = getApiBase();
 function getToken() { return localStorage.getItem("tg_erp_token"); }
 
 async function apiFetch(path: string, method = "GET", body?: unknown) {

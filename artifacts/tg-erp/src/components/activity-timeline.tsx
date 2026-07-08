@@ -4,6 +4,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { format } from "date-fns";
 import { MessageSquare, ShoppingBag, ChefHat, Truck, CheckCircle2, XCircle, ClipboardList, Clock } from "lucide-react";
 import { useAuth } from "@/lib/auth";
+import { getApiBase } from "@/lib/api-base";
 
 interface TimelineEntry {
   id: number;
@@ -26,7 +27,7 @@ const STATUS_LABELS: Record<string, { label: string; icon: React.ReactNode; colo
   failed:             { label: "Delivery failed", icon: <XCircle className="h-3.5 w-3.5" />, color: "text-red-400" },
 };
 
-const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+const BASE = getApiBase();
 function getToken() { return localStorage.getItem("tg_erp_token"); }
 async function apiFetch(path: string, method = "GET", body?: unknown) {
   const res = await fetch(`${BASE}${path}`, {

@@ -7,8 +7,9 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { FileDown, ShieldCheck, ListChecks, Loader2, Users, TrendingUp, Package, FileSpreadsheet } from "lucide-react";
+import { getApiBase } from "@/lib/api-base";
 
-const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+const BASE = getApiBase();
 function getToken() { return localStorage.getItem("tg_erp_token"); }
 
 async function downloadFile(path: string, filename: string) {

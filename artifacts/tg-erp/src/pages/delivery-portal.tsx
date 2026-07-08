@@ -13,6 +13,7 @@ import {
   AlertCircle, Copy, Star,
 } from "lucide-react";
 import { MyTasks } from "@/components/my-tasks";
+import { getApiBase } from "@/lib/api-base";
 
 interface MenuItem {
   id: number; nameEn: string; nameAm: string; priceAed: number; available: boolean; categoryId: number;
@@ -30,7 +31,7 @@ interface DeliveryOrder {
   totalAed: number; createdAt: string; updatedAt?: string;
 }
 
-const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+const BASE = getApiBase();
 function getToken() { return localStorage.getItem("tg_erp_token"); }
 
 async function apiFetch(path: string, method = "GET", body?: unknown) {

@@ -7,8 +7,9 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { ChefHat, Bike, DollarSign, TrendingUp, Calendar, Users, Award, Filter } from "lucide-react";
 import { format, subDays, startOfMonth } from "date-fns";
+import { getApiBase } from "@/lib/api-base";
 
-const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+const BASE = getApiBase();
 function getToken() { return localStorage.getItem("tg_erp_token"); }
 async function apiFetch(path: string) {
   const res = await fetch(`${BASE}${path}`, {

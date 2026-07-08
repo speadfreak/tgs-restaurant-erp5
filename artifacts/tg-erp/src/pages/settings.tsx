@@ -10,8 +10,9 @@ import {
   Settings, MessageSquare, Mail, Trophy, Globe, Shield,
   Eye, EyeOff, Edit2, Check, X, Loader2, Wifi, TestTube, Building2
 } from "lucide-react";
+import { getApiBase } from "@/lib/api-base";
 
-const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+const BASE = getApiBase();
 function getToken() { return localStorage.getItem("tg_erp_token"); }
 function apiFetch(path: string, method = "GET", body?: unknown) {
   return fetch(`${BASE}${path}`, {

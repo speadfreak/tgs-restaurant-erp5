@@ -11,8 +11,9 @@ import { Badge } from "@/components/ui/badge";
 import { Search, Plus, Edit, Phone, MapPin, ShoppingBag, Star, Users } from "lucide-react";
 import { format } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
+import { getApiBase } from "@/lib/api-base";
 
-const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+const BASE = getApiBase();
 function getToken() { return localStorage.getItem("tg_erp_token"); }
 
 async function patchCustomer(id: number, data: { name?: string; phone?: string; address?: string }) {

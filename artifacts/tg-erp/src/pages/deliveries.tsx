@@ -7,6 +7,7 @@ import {
   Truck, Check, X, MapPin, Phone, Clock, Wifi, WifiOff,
   ExternalLink, RefreshCw, User, Radio, Package,
 } from "lucide-react";
+import { getApiBase } from "@/lib/api-base";
 
 // Unified delivery interface — sourced from ordersTable via /api/delivery/queue
 interface Delivery {
@@ -27,7 +28,7 @@ interface Delivery {
   updatedAt: string;
 }
 
-const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+const BASE = getApiBase();
 function getToken() { return localStorage.getItem("tg_erp_token"); }
 async function apiFetch(path: string, method = "GET", body?: unknown) {
   const res = await fetch(`${BASE}${path}`, {

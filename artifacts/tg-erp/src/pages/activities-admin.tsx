@@ -9,6 +9,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
 import { ClipboardList, Plus, CheckCircle2, Clock, User } from "lucide-react";
 import { format } from "date-fns";
+import { getApiBase } from "@/lib/api-base";
 
 interface Activity {
   id: number; title: string; dueDate: string | null; status: string;
@@ -18,7 +19,7 @@ interface Activity {
 }
 interface StaffUser { id: number; name: string; role: string; branchId: number | null }
 
-const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+const BASE = getApiBase();
 function getToken() { return localStorage.getItem("tg_erp_token"); }
 async function apiFetch(path: string, method = "GET", body?: unknown) {
   const res = await fetch(`${BASE}${path}`, {

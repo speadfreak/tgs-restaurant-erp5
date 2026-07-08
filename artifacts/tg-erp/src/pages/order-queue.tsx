@@ -10,6 +10,7 @@ import {
   MessageSquare, Mic, Clock, ChevronDown, ChevronUp,
   CheckCircle, XCircle, Loader2, Phone, User, Bell, Wifi, WifiOff
 } from "lucide-react";
+import { getApiBase } from "@/lib/api-base";
 
 interface QueueOrder {
   id: number;
@@ -28,7 +29,7 @@ interface MenuItem { id: number; nameEn: string; nameAm: string; priceAed: numbe
 interface Category { id: number; nameEn: string }
 interface CartItem { menuItemId: number; name: string; quantity: number; unitPrice: number }
 
-const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+const BASE = getApiBase();
 function getToken() { return localStorage.getItem("tg_erp_token"); }
 async function apiFetch(path: string, method = "GET", body?: unknown) {
   const res = await fetch(`${BASE}${path}`, {

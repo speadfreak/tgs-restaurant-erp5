@@ -17,8 +17,9 @@ import {
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import type { UserInputRole } from "@workspace/api-client-react";
+import { getApiBase } from "@/lib/api-base";
 
-const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+const BASE = getApiBase();
 function getToken() { return localStorage.getItem("tg_erp_token"); }
 async function apiFetch(path: string, method = "GET", body?: unknown) {
   const res = await fetch(`${BASE}${path}`, {

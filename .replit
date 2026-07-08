@@ -27,7 +27,7 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "pnpm --filter @workspace/api-server run dev & pnpm --filter @workspace/tg-erp run dev"
-waitForPort = 8080
+waitForPort = 25390
 
 [workflows.workflow.metadata]
 outputType = "webview"
@@ -61,12 +61,8 @@ localPort = 8080
 externalPort = 8080
 
 [[ports]]
-localPort = 8081
-externalPort = 80
-
-[[ports]]
 localPort = 25390
-externalPort = 3000
+externalPort = 80
 
 [[ports]]
 localPort = 25391
