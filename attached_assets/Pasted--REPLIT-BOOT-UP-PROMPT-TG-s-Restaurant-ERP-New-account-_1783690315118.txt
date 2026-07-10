@@ -1,0 +1,333 @@
+# REPLIT BOOT-UP PROMPT — TG's Restaurant ERP (ቲጂ ምግብ ቤት)
+### New account / new Replit — get everything running from GitHub import
+### Updated: Phase 6 complete + Render deployment prep included
+
+---
+
+## READ THIS FULLY BEFORE TOUCHING ANYTHING
+
+This is a production-grade, multi-portal restaurant ERP system imported from GitHub. It is a **pnpm monorepo** with multiple sub-packages. Your only job right now is to understand the structure, install dependencies, configure the environment, run the database, and confirm every portal is working. Do **not** modify any feature code, refactor anything, or "improve" anything — just make it run exactly as it was built.
+
+---
+
+## WHAT THIS SYSTEM IS
+
+TG's Restaurant (ቲጂ ምግብ ቤት) ERP is a **delivery-only** Ethiopian restaurant management system operating in Dubai, UAE. There is **no dine-in, no walk-in, no table service** — delivery only. It has five separate role-based portals all served from one backend and one PostgreSQL database:
+
+| Portal | URL | Who uses it |
+|---|---|---|
+| Admin Command Center | `/` | Super Admin, Branch Manager |
+| Chef Portal | `/chef` | Kitchen staff only |
+| Deliveryman Portal | `/delivery` | Delivery staff only |
+| Addis Ababa Portal | `/addis` | Ethiopia-based supply staff only |
+| Customer Webapp | `/menu-public` | Public customers (no login needed) |
+| Order Tracker | `/track/:code` | Public customers (no login needed) |
+
+Each role can **only** access their own portal. Login auto-redirects by role. Enforced server-side — a chef JWT gets `403` on any admin API route regardless of what the frontend shows.
+
+---
+
+## PROJECT STRUCTURE
+
+After importing from GitHub you will see:
+
+```
+/artifacts/
+  /tg-erp/              ← React + Vite frontend (all portals in one build)
+  /api-server/          ← Express backend (REST API + Socket.IO)
+  /mockup-sandbox/      ← IGNORE — internal design sandbox only
+/lib/
+  /db/                  ← PostgreSQL schema via Drizzle ORM
+  /api-zod/             ← Shared Zod validation types
+  /api-client-react/    ← Shared React Query API client
+  /api-spec/            ← OpenAPI spec
+/scripts/               ← Seed scripts
+render.yaml             ← Render deployment config (ignore for Replit)
+pnpm-workspace.yaml     ← Monorepo workspace definition
+package.json            ← Root orchestrator
+replit.md               ← READ THIS FIRST — has project-specific instructions
+```
+
+**Read `replit.md` and root `package.json` before running anything.**
+
+---
+
+## STEP 1 — SET UP ENVIRONMENT VARIABLES
+
+Open Replit's **Secrets** panel (lock icon in sidebar). Add every variable below. Never put secrets in `.env` files that get committed to the repo.
+
+### Required to boot — system crashes without these:
+
+| Secret Key | Value |
+|---|---|
+| `DATABASE_URL` | PostgreSQL connection string (set up in Step 2 first) |
+| `JWT_SECRET` | Any random 64-character string |
+| `JWT_REFRESH_SECRET` | A different random 64-character string |
+| `SETTINGS_ENCRYPTION_KEY` | Any random 32-character string |
+| `NODE_ENV` | `development` |
+| `PORT` | `3000` |
+| `FRONTEND_URL` | `http://localhost:5173` (for CORS — update this to deployed URL in production) |
+
+### Required for full features — set to `placeholder` if not yet configured:
+
+| Secret Key | Value |
+|---|---|
+| `TWILIO_ACCOUNT_SID` | `placeholder` |
+| `TWILIO_AUTH_TOKEN` | `placeholder` |
+| `TWILIO_WHATSAPP_NUMBER` | `placeholder` |
+| `SENDGRID_API_KEY` | `placeholder` |
+
+**After adding the above — scan the codebase for any other `process.env.` references:**
+```bash
+grep -r "process\.env\." artifacts/api-server/src --include="*.ts" | grep -v "//.*process"
+```
+Add anything found that isn't already in Secrets. A missing env var causes silent crashes.
+
+---
+
+## STEP 2 — SET UP POSTGRESQL DATABASE
+
+1. In Replit → **Database** tab in sidebar → create a new PostgreSQL database → copy the connection string
+2. Paste it as `DATABASE_URL` in Secrets
+3. Push the schema (creates all tables):
+```bash
+pnpm run db:push
+```
+If that script doesn't exist at root level, try:
+```bash
+cd lib/db && npx drizzle-kit push
+```
+4. Seed demo data (staff accounts, branches, menu items, sample orders):
+```bash
+pnpm run db:seed
+```
+If that doesn't exist at root:
+```bash
+cd scripts && npx tsx src/seed.ts
+```
+5. Verify tables were created:
+```bash
+psql $DATABASE_URL -c "\dt"
+```
+You should see 20+ tables including: `users`, `orders`, `order_items`, `menu_items`, `menu_categories`, `branches`, `lottery_entries`, `lottery_draws`, `import_shipments`, `import_payments`, `suppliers_addis`, `settings`, `login_attempts`, `whatsapp_messages`, etc.
+
+If you see fewer than 15 tables, the schema push failed — check the error and fix before continuing.
+
+---
+
+## STEP 3 — INSTALL DEPENDENCIES
+
+This is a pnpm monorepo. **Always install from root — never cd into sub-folders and install separately.**
+
+```bash
+pnpm install
+```
+
+If pnpm is not available:
+```bash
+npm install -g pnpm && pnpm install
+```
+
+Node version must be **18 or higher**. If you get peer dependency errors, check Node version first:
+```bash
+node --version
+```
+
+Do not use `--force` to bypass errors. Read the error and fix the root cause.
+
+---
+
+## STEP 4 — START THE SYSTEM
+
+Check the root `package.json` for a combined dev script. It likely runs both backend and frontend in parallel:
+
+```bash
+pnpm run dev
+```
+
+If there is no combined dev script, open two Shell tabs:
+
+```bash
+# Shell tab 1 — API server (Express + Socket.IO)
+cd artifacts/api-server && pnpm run dev
+
+# Shell tab 2 — Frontend (Vite + React)
+cd artifacts/tg-erp && pnpm run dev
+```
+
+Wait for both to confirm they are ready:
+- API: something like `Server listening on port 3000`
+- Frontend: something like `Local: http://localhost:5173` or Vite's ready message
+
+---
+
+## STEP 5 — VERIFY ALL PORTALS
+
+Test each portal with its exact credentials. Do not report the system as running until every checklist item below passes. Staff passwords were standardized to `staff123` — use these exact credentials.
+
+---
+
+### ✅ Super Admin Portal — URL: `/`
+
+| Field | Value |
+|---|---|
+| Phone | `+251911001001` |
+| Password | `admin123` |
+
+After login → **Admin Command Center** loads with full sidebar.
+
+Sidebar must include all of these sections:
+Dashboard · Orders · Kitchen (KDS) · Deliveries · Menu · Inventory · Finance · Payroll · Lottery · Staff · Branches · Customers · Order Queue · Addis Supply Chain · Audit & Reports · Settings
+
+Verify:
+- [ ] Dashboard shows live stats: orders today, revenue, active staff count
+- [ ] Orders page loads with order list and correct status badges
+- [ ] Staff page shows role filter tabs: All / Chefs / Delivery / Order Intake / Addis / Managers / Admins
+- [ ] Lottery page shows "Today's Lucky Numbers" live table + Draw controls
+- [ ] Settings page loads with 6 sections: WhatsApp, Email, Lottery, Addis, System, Security
+- [ ] Trying to access `/chef` as super admin redirects correctly or shows chef portal view
+
+---
+
+### ✅ Chef Portal — URL: `/chef`
+
+| Field | Value |
+|---|---|
+| Phone | `+251911001003` (check seed script for exact number) |
+| Password | `staff123` |
+
+After login → **automatically redirected to `/chef`** — never the admin dashboard.
+
+Verify:
+- [ ] KDS (Kitchen Display System) loads showing incoming order queue
+- [ ] Chef's name visible in header (e.g. "Chef Meron's Kitchen 👩‍🍳")
+- [ ] Live active order count shown in header (e.g. "2 active orders")
+- [ ] Order tickets show channel badges: `📱 WhatsApp Relay` / `🌐 Web Order` / `🎙️ Voice Queue`
+- [ ] No walk-in or dine-in options anywhere
+- [ ] Accept button and Ready button are large and touch-friendly
+- [ ] Navigating to `/` or `/admin` from chef session → redirected back to `/chef`
+- [ ] API call: `GET /api/kitchen/queue` with chef JWT → returns `200` with order data (not `403`)
+
+---
+
+### ✅ Deliveryman Portal — URL: `/delivery`
+
+| Field | Value |
+|---|---|
+| Phone | `+251911001004` (check seed script for exact number) |
+| Password | `staff123` |
+
+After login → **automatically redirected to `/delivery`**.
+
+Verify:
+- [ ] **Tab 1 — Relay Order**: shows Customer Name, Phone Number, Delivery Address fields
+- [ ] Menu picker in Relay Order tab loads all food categories and items (this was a confirmed bug that has been fixed — verify it works)
+- [ ] Menu items show with Available (green) / Unavailable (red) badges
+- [ ] **Tab 2 — My Deliveries**: shows live queue of ready/assigned orders
+- [ ] Rider's name shown in portal header
+- [ ] Today's delivery count and commission total visible
+- [ ] No walk-in options anywhere
+- [ ] Navigating to `/` or `/chef` from delivery session → redirected back to `/delivery`
+- [ ] API call: `GET /api/menu/items` with delivery JWT → returns `200` with menu data (not `403`)
+
+---
+
+### ✅ Addis Ababa Portal — URL: `/addis`
+
+| Field | Value |
+|---|---|
+| Phone | `+251911001005` (check seed script for exact number) |
+| Password | `staff123` |
+
+After login → **automatically redirected to `/addis`**.
+
+Verify:
+- [ ] Log New Shipment form loads with fields: Shipment Reference, Date, Supplier, Items (repeatable), Notes
+- [ ] My Shipment History shows past shipments with Paid / Partially Paid / Credit Outstanding status
+- [ ] Suppliers page loads and allows adding/editing suppliers
+- [ ] No access to any admin, kitchen, or delivery sections — any attempt redirects to `/addis`
+
+---
+
+### ✅ Customer Webapp — URL: `/menu-public` (no login needed)
+
+Verify:
+- [ ] TG's Restaurant logo and branding visible
+- [ ] Menu categories and items load with prices in AED
+- [ ] English + Amharic bilingual labels present
+- [ ] Ordering form: Name, Phone, Delivery Location, item selection, cart total
+- [ ] No dine-in / walk-in / table selection options anywhere
+- [ ] After placing order: Order Code displayed + link to `/track/[code]`
+
+---
+
+### ✅ Order Tracker — URL: `/track/[order-code]` (no login needed)
+
+Find an order code from the admin Orders page, then navigate to `/track/[that-code]`.
+
+Verify:
+- [ ] Order status timeline loads correctly
+- [ ] Status labels match: Received → Preparing → Ready → Out for Delivery → Delivered
+
+---
+
+## STEP 6 — REAL-TIME TWO-BROWSER TEST (mandatory)
+
+This test proves Socket.IO is working. Do not skip it.
+
+Open two browser windows simultaneously:
+- **Window 1** — Chef Portal (logged in as chef, e.g. Meron)
+- **Window 2** — Deliveryman Portal (logged in as delivery staff, e.g. Solomon) — use incognito
+
+**Run this sequence:**
+
+1. In Window 2 (delivery) → Relay Order tab → fill in any customer name, phone, address → select any menu item → click **"Send to Kitchen"**
+2. In Window 1 (chef) → **the new order ticket must appear within 2 seconds — no refresh**
+3. In Window 1 → tap **Accept** → check Admin orders page updates status to "Preparing"
+4. In Window 1 → tap **Ready** → check Window 2 (delivery) → the order must appear in "My Deliveries" within 2 seconds — no refresh
+
+**All four steps must pass.** If any step requires a manual refresh, Socket.IO rooms are not wired correctly — report which step failed and what was visible. Do not mark this as complete until all four pass.
+
+---
+
+## STEP 7 — SECURITY VERIFICATION
+
+- [ ] Log in as chef → open browser console → run `fetch('/api/users').then(r=>console.log(r.status))` → must return `403`
+- [ ] Log in with wrong password 5 times → account lock message appears
+- [ ] Admin Staff page → try to create a new chef with no branch selected → form blocks submission with validation error
+
+---
+
+## STEP 8 — LOTTERY QUICK CHECK
+
+- [ ] Create a test order from the delivery portal → go to Admin → Lottery → "Today's Lucky Numbers" table → the new order's lucky number appears within 2 seconds (auto-generated on order creation)
+- [ ] Click the lucky number in the table → it copies to clipboard with a toast notification
+- [ ] "Mark Sent" toggle is clickable and saves state
+
+---
+
+## STEP 9 — REPORT BACK
+
+Report all of the following:
+
+1. ✅ Live preview URL for the frontend
+2. ✅ Live preview URL for the API (e.g. `https://[replit-url]/api/health`)
+3. ✅ All 5 portals confirmed loading with correct role redirects
+4. ✅ Two-browser real-time test passed (all 4 steps)
+5. ✅ Chef JWT returns 403 on admin API route
+6. ✅ Lucky number appears in Lottery panel on order creation
+7. ⚠️ List any checklist items that failed with specific error details
+
+---
+
+## DO NOT DO ANY OF THESE
+
+- ❌ Do not modify feature code, routes, or React components
+- ❌ Do not refactor, rename, or "clean up" anything
+- ❌ Do not install new packages unless a missing dependency causes a crash
+- ❌ Do not add walk-in, dine-in, or table service options — this is delivery only
+- ❌ Do not run `npm install` inside sub-folders — always use `pnpm install` from root
+- ❌ Do not change the database schema or run new migrations
+- ❌ Do not modify `render.yaml` — it is used for production deployment, not Replit
+
+Your only job: **import → secrets → database → install → run → verify all 9 steps → report.**
