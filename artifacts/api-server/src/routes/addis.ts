@@ -230,6 +230,20 @@ router.get("/exchange-rate", async (req, res): Promise<void> => {
   res.json(rate ?? { fromCurrency: from, toCurrency: to, rate: "1" });
 });
 
+// GET /addis/exchange-rate/live — fetch real-time ETB→AED rate from a public FX API
+router.get("/exchange-rate/live", async (req, res): Promise<void> => {
+  try {
+    const resp = await fetch("https://open.er-api.com/v6/latest/ETB");
+    if (!resp.ok) throw new Error(`FX API returned ${resp.status}`);
+    const data = (await resp.json()) as { result?: string; rates?: Record<string, number> };
+    const rate = data.rates?.AED;
+    if (data.result !== "success" || !rate) throw new Error("FX API returned no AED rate");
+    res.json({ fromCurrency: "ETB", toCurrency: "AED", rate: rate.toFixed(6), source: "open.er-api.com", fetchedAt: new Date().toISOString() });
+  } catch (err) {
+    res.status(502).json({ error: err instanceof Error ? err.message : "Failed to fetch live exchange rate" });
+  }
+});
+
 // PUT /addis/exchange-rate
 router.put("/exchange-rate", async (req, res): Promise<void> => {
   const { fromCurrency, toCurrency, rate, setByUserId } = req.body;

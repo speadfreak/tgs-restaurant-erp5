@@ -57,6 +57,7 @@ export default function AddisPage() {
   const [creditSummary, setCreditSummary] = useState<{ totalOutstanding: number; perSupplier: { supplierId: number; supplierName: string; outstanding: number }[] } | null>(null);
   const [loading, setLoading] = useState(false);
   const [exchangeRate, setExchangeRate] = useState<number>(0.02); // ~0.02 AED per ETB
+  const [refreshingRate, setRefreshingRate] = useState(false);
   const [ledgerFilter, setLedgerFilter] = useState<string>("all");
   const [expandedShipment, setExpandedShipment] = useState<number | null>(null);
   const [shipmentItemsCache, setShipmentItemsCache] = useState<Record<number, { itemName: string; quantity: string; unit: string; unitCostEtb: string; unitCostAed: string; totalCostAed: string }[]>>({});
@@ -139,6 +140,21 @@ export default function AddisPage() {
       }
       return updated;
     }));
+  };
+
+  const refreshLiveRate = async () => {
+    setRefreshingRate(true);
+    try {
+      const live = await apiFetch("/api/addis/exchange-rate/live");
+      if (live?.rate) {
+        await apiFetch("/api/addis/exchange-rate", "PUT", { fromCurrency: "ETB", toCurrency: "AED", rate: Number(live.rate), setByUserId: user?.id });
+        setExchangeRate(Number(live.rate));
+        toast({ title: "Exchange rate updated", description: `1 ETB = ${live.rate} AED (live, via ${live.source})` });
+      }
+    } catch {
+      toast({ title: "Could not fetch live rate", variant: "destructive" });
+    }
+    setRefreshingRate(false);
   };
 
   const addItem = () => setLogItems(prev => [...prev, { ...EMPTY_ITEM }]);
@@ -452,7 +468,16 @@ export default function AddisPage() {
             <div className="cinema-card rounded-2xl p-5 space-y-3">
               <div className="flex items-center justify-between">
                 <h3 className="cinema-title-sm text-orange-400 text-sm">Shipment Items *</h3>
-                <div className="text-xs text-zinc-600">Exchange rate: 1 ETB = {exchangeRate} AED</div>
+                <button
+                  type="button"
+                  onClick={refreshLiveRate}
+                  disabled={refreshingRate}
+                  title="Fetch live ETB→AED rate"
+                  className="text-xs text-zinc-600 hover:text-amber-400 flex items-center gap-1.5 transition-colors"
+                >
+                  Exchange rate: 1 ETB = {exchangeRate} AED
+                  <RefreshCw className={`h-3 w-3 ${refreshingRate ? "animate-spin" : ""}`} />
+                </button>
               </div>
               {logItems.map((item, i) => (
                 <div key={i} className="grid grid-cols-5 gap-2 items-end">

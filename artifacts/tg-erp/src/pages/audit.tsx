@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
-import { FileDown, ShieldCheck, ListChecks, Loader2, Users, TrendingUp, Package, FileSpreadsheet } from "lucide-react";
+import { FileDown, ShieldCheck, ListChecks, Loader2, Users, TrendingUp, Package, FileSpreadsheet, Printer } from "lucide-react";
 import { getApiBase } from "@/lib/api-base";
 
 const BASE = getApiBase();
@@ -28,6 +28,98 @@ async function downloadFile(path: string, filename: string) {
 // Keep CSV alias for readability at call sites
 const downloadCsv = downloadFile;
 
+// RFC 4180-aware CSV parser — handles quoted fields containing commas, quotes, and newlines.
+function csvToRows(csvText: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let inQuotes = false;
+  const text = csvText.replace(/\r\n/g, "\n");
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; } else { inQuotes = false; }
+      } else {
+        field += c;
+      }
+    } else if (c === '"') {
+      inQuotes = true;
+    } else if (c === ",") {
+      row.push(field); field = "";
+    } else if (c === "\n") {
+      row.push(field); field = "";
+      rows.push(row); row = [];
+    } else {
+      field += c;
+    }
+  }
+  if (field.length > 0 || row.length > 0) { row.push(field); rows.push(row); }
+  return rows.filter(r => r.length > 1 || r[0] !== "");
+}
+
+async function printCsvReport(path: string, title: string) {
+  const res = await fetch(`${BASE}${path}`, { headers: { Authorization: `Bearer ${getToken() ?? ""}` } });
+  if (!res.ok) throw new Error(`${res.status}`);
+  const text = await res.text();
+  const rows = csvToRows(text);
+  const [header, ...body] = rows;
+  const win = window.open("", "_blank", "width=1000,height=800");
+  if (!win) throw new Error("Popup blocked — allow popups to print reports");
+
+  // Build the DOM via createElement/textContent (never innerHTML/document.write with report
+  // data) so untrusted CSV content (customer names, notes, etc.) can never execute as HTML/JS.
+  const doc = win.document;
+  doc.title = title;
+  const style = doc.createElement("style");
+  style.textContent = `
+    body { font-family: Arial, sans-serif; padding: 24px; color: #111; }
+    h1 { font-size: 18px; margin-bottom: 4px; }
+    .meta { color: #666; font-size: 12px; margin-bottom: 16px; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { border: 1px solid #ccc; padding: 6px 8px; text-align: left; }
+    th { background: #f2f2f2; text-transform: capitalize; }
+    tr:nth-child(even) { background: #fafafa; }
+    @media print { body { padding: 0; } }
+  `;
+  doc.head.appendChild(style);
+
+  const h1 = doc.createElement("h1");
+  h1.textContent = `TG's Restaurant ERP — ${title}`;
+  const meta = doc.createElement("div");
+  meta.className = "meta";
+  meta.textContent = `Generated ${new Date().toLocaleString()}`;
+  doc.body.appendChild(h1);
+  doc.body.appendChild(meta);
+
+  const table = doc.createElement("table");
+  const thead = doc.createElement("thead");
+  const headRow = doc.createElement("tr");
+  (header ?? []).forEach(h => {
+    const th = doc.createElement("th");
+    th.textContent = h;
+    headRow.appendChild(th);
+  });
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = doc.createElement("tbody");
+  body.forEach(r => {
+    const tr = doc.createElement("tr");
+    r.forEach(cellText => {
+      const td = doc.createElement("td");
+      td.textContent = cellText;
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  doc.body.appendChild(table);
+
+  win.focus();
+  win.print();
+}
+
 export default function AuditPage() {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -40,6 +132,23 @@ export default function AuditPage() {
   const [busy, setBusy] = useState<string | null>(null);
 
   const branchQuery = branchId ? `&branchId=${branchId}` : "";
+
+  const printReport = async (kind: "orders" | "history" | "weekly" | "staff" | "inventory", title: string) => {
+    setBusy(`${kind}-print`);
+    try {
+      const paths: Record<string, string> = {
+        orders: `/api/audit/daily-orders?date=${date}${branchQuery}`,
+        history: `/api/audit/order-history?date=${date}${branchQuery}`,
+        weekly: `/api/audit/weekly-revenue?weekStart=${weekStart}${branchQuery}`,
+        staff: `/api/audit/staff-activity?date=${date}${branchQuery}`,
+        inventory: `/api/audit/inventory-report${branchQuery ? `?${branchQuery.slice(1)}` : ""}`,
+      };
+      await printCsvReport(paths[kind], title);
+    } catch (err) {
+      toast({ title: "Print failed", description: err instanceof Error && err.message === "Popup blocked — allow popups to print reports" ? err.message : undefined, variant: "destructive" });
+    }
+    setBusy(null);
+  };
 
   const exportWeeklyRevenue = async (fmt: "csv" | "xlsx" = "csv") => {
     setBusy(`weekly-${fmt}`);
@@ -171,6 +280,9 @@ export default function AuditPage() {
                 {busy === "orders-xlsx" ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <FileSpreadsheet className="h-4 w-4 mr-2" />}
                 Excel
               </Button>
+              <Button onClick={() => printReport("orders", `Daily Order Audit — ${date}`)} disabled={busy !== null} variant="outline" size="icon" title="Print">
+                {busy === "orders-print" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Printer className="h-4 w-4" />}
+              </Button>
             </div>
           </CardContent>
         </Card>
@@ -191,6 +303,9 @@ export default function AuditPage() {
               <Button onClick={() => exportOrderHistory("xlsx")} disabled={busy !== null} variant="outline" className="flex-1 border-emerald-500/30 text-emerald-500 hover:bg-emerald-950/20">
                 {busy === "history-xlsx" ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <FileSpreadsheet className="h-4 w-4 mr-2" />}
                 Excel
+              </Button>
+              <Button onClick={() => printReport("history", `Order Status History — ${date}`)} disabled={busy !== null} variant="outline" size="icon" title="Print">
+                {busy === "history-print" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Printer className="h-4 w-4" />}
               </Button>
             </div>
           </CardContent>
@@ -213,6 +328,9 @@ export default function AuditPage() {
                 {busy === "weekly-xlsx" ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <FileSpreadsheet className="h-4 w-4 mr-2" />}
                 Excel
               </Button>
+              <Button onClick={() => printReport("weekly", `Weekly Revenue — ${weekStart}`)} disabled={busy !== null} variant="outline" size="icon" title="Print">
+                {busy === "weekly-print" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Printer className="h-4 w-4" />}
+              </Button>
             </div>
           </CardContent>
         </Card>
@@ -234,6 +352,9 @@ export default function AuditPage() {
                 {busy === "staff-xlsx" ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <FileSpreadsheet className="h-4 w-4 mr-2" />}
                 Excel
               </Button>
+              <Button onClick={() => printReport("staff", `Staff Activity — ${date}`)} disabled={busy !== null} variant="outline" size="icon" title="Print">
+                {busy === "staff-print" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Printer className="h-4 w-4" />}
+              </Button>
             </div>
           </CardContent>
         </Card>
@@ -254,6 +375,9 @@ export default function AuditPage() {
               <Button onClick={() => exportInventory("xlsx")} disabled={busy !== null} variant="outline" className="flex-1 border-emerald-500/30 text-emerald-500 hover:bg-emerald-950/20">
                 {busy === "inventory-xlsx" ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <FileSpreadsheet className="h-4 w-4 mr-2" />}
                 Excel
+              </Button>
+              <Button onClick={() => printReport("inventory", "Inventory Snapshot")} disabled={busy !== null} variant="outline" size="icon" title="Print">
+                {busy === "inventory-print" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Printer className="h-4 w-4" />}
               </Button>
             </div>
           </CardContent>

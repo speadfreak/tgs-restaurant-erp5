@@ -63,6 +63,8 @@ export default function SettingsPage() {
   const [exchangeRateSaving, setExchangeRateSaving] = useState(false);
   const [exchangeRateInput, setExchangeRateInput] = useState<string>("");
   const [editingRate, setEditingRate] = useState(false);
+  const [fetchingLiveRate, setFetchingLiveRate] = useState(false);
+  const [liveRateMeta, setLiveRateMeta] = useState<{ source: string; fetchedAt: string } | null>(null);
 
   const fetchSettings = useCallback(async () => {
     setLoading(true);
@@ -111,6 +113,25 @@ export default function SettingsPage() {
   useEffect(() => {
     if (activeSection === "addis") fetchExchangeRate();
   }, [activeSection, fetchExchangeRate]);
+
+  const fetchLiveRate = async () => {
+    setFetchingLiveRate(true);
+    try {
+      const res = await apiFetch("/api/addis/exchange-rate/live");
+      const j = await res.json();
+      if (res.ok && j.rate) {
+        setExchangeRateInput(String(j.rate));
+        setEditingRate(true);
+        setLiveRateMeta({ source: j.source, fetchedAt: j.fetchedAt });
+        toast({ title: "Live rate fetched", description: `1 ETB = ${j.rate} AED (${j.source}) — review and save` });
+      } else {
+        toast({ title: "Could not fetch live rate", description: j.error ?? "Unknown error", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Could not fetch live rate", variant: "destructive" });
+    }
+    setFetchingLiveRate(false);
+  };
 
   if (user && user.role !== "super_admin") {
     return <div className="p-8 text-muted-foreground">Super Admin access required.</div>;
@@ -259,6 +280,23 @@ export default function SettingsPage() {
             <p className="text-xs text-muted-foreground mb-3">
               Rate used in Addis supply-chain cost calculations. 1 ETB = X AED.
             </p>
+            <div className="mb-3">
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={fetchingLiveRate}
+                onClick={fetchLiveRate}
+                className="border-amber-500/30 text-amber-400 hover:bg-amber-500/10"
+              >
+                {fetchingLiveRate ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : <Wifi className="h-3.5 w-3.5 mr-1.5" />}
+                Fetch Live Rate
+              </Button>
+              {liveRateMeta && (
+                <span className="text-[11px] text-muted-foreground ml-2">
+                  via {liveRateMeta.source} · {new Date(liveRateMeta.fetchedAt).toLocaleTimeString()}
+                </span>
+              )}
+            </div>
             {exchangeRateLoading ? (
               <div className="flex items-center gap-2 text-zinc-500 text-sm"><Loader2 className="h-4 w-4 animate-spin" />Loading...</div>
             ) : editingRate ? (

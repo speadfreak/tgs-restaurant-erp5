@@ -21,10 +21,12 @@ function buildAllowedOrigins(): string[] {
       .map((o) => o.trim())
       .filter(Boolean);
   if (process.env["NODE_ENV"] === "production") return []; // fail closed
+  const devDomain = process.env["REPLIT_DEV_DOMAIN"];
   return [
     "http://localhost:5173",
     "http://localhost:3000",
     "http://localhost:25390",
+    ...(devDomain ? [`https://${devDomain}`, `http://${devDomain}`] : []),
   ];
 }
 
