@@ -68,7 +68,10 @@ router.patch("/users/:id", async (req, res): Promise<void> => {
   if (parsed.data.baseSalary !== undefined && parsed.data.baseSalary !== null) updateData.baseSalary = String(parsed.data.baseSalary);
   // Support password change via PATCH (not in generated schema, handled separately)
   const rawPassword = (req.body as Record<string, unknown>).password;
-  if (typeof rawPassword === "string" && rawPassword.length >= 6) {
+  if (rawPassword !== undefined && rawPassword !== null && rawPassword !== "") {
+    if (typeof rawPassword !== "string" || rawPassword.length < 6) {
+      res.status(400).json({ error: "Password must be at least 6 characters" }); return;
+    }
     updateData.passwordHash = await bcrypt.hash(rawPassword, 10);
     updateData.passwordChanged = false;
   }

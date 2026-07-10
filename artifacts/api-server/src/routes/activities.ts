@@ -71,19 +71,24 @@ router.post("/activities", authenticate, requireRole(...ADMIN_ROLES), async (req
   res.status(201).json(result);
 });
 
-// PATCH /activities/:id/done — any authenticated user can mark a task done
+// PATCH /activities/:id/done — assignee or admin/manager can mark a task done
 router.patch("/activities/:id/done", authenticate, async (req, res): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+  // Fetch first to enforce ownership for non-admins
+  const [existing] = await db.select().from(staffActivitiesTable).where(eq(staffActivitiesTable.id, id));
+  if (!existing) { res.status(404).json({ error: "Activity not found" }); return; }
+  if (!ADMIN_ROLES.includes(req.user!.role) && existing.assignedToUserId !== req.user!.id) {
+    res.status(403).json({ error: "Forbidden: you can only mark your own tasks as done" }); return;
+  }
   const [a] = await db.update(staffActivitiesTable).set({ status: "done" }).where(eq(staffActivitiesTable.id, id)).returning();
-  if (!a) { res.status(404).json({ error: "Activity not found" }); return; }
   const users = await db.select({ id: usersTable.id, name: usersTable.name }).from(usersTable);
   const userMap = new Map(users.map(u => [u.id, u]));
-  res.json(buildActivity(a, userMap.get(a.assignedToUserId), a.assignedByUserId ? userMap.get(a.assignedByUserId!) : null));
+  res.json(buildActivity(a!, userMap.get(a!.assignedToUserId), a!.assignedByUserId ? userMap.get(a!.assignedByUserId!) : null));
 });
 
 router.delete("/activities/:id", authenticate, requireRole(...ADMIN_ROLES), async (req, res): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
   await db.delete(staffActivitiesTable).where(eq(staffActivitiesTable.id, id));
   res.sendStatus(204);
