@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useAuth } from "@/lib/auth";
 import { useLocation } from "wouter";
 import { useSocket } from "@/hooks/use-socket";
+import { useAttendance } from "@/hooks/use-attendance";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
@@ -74,6 +75,8 @@ export default function ChefPortal() {
   const [toggling86, setToggling86] = useState<Record<number, boolean>>({});
   const prevCountRef = useRef(0);
   const socket = useSocket({ branchId: user?.branchId ?? undefined, userId: user?.id });
+  const isKitchenStaff = !!user && ["kitchen_staff", "super_admin", "branch_manager"].includes(user.role);
+  useAttendance(isKitchenStaff, user?.branchId);
 
   const fetchQueue = useCallback(async () => {
     setFetching(true);

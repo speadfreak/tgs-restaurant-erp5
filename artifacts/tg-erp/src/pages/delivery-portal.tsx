@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useAuth } from "@/lib/auth";
 import { useLocation } from "wouter";
 import { useSocket } from "@/hooks/use-socket";
+import { useAttendance } from "@/hooks/use-attendance";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -102,6 +103,8 @@ export default function DeliveryPortal() {
   const [lastLucky, setLastLucky] = useState<{ orderCode: string; luckyNumber: number | null; customerName: string; customerPhone: string } | null>(null);
 
   const socket = useSocket({ branchId: user?.branchId ?? undefined, userId: user?.id });
+  const isDeliveryStaff = !!user && ["delivery_staff", "super_admin", "branch_manager"].includes(user.role);
+  useAttendance(isDeliveryStaff, user?.branchId);
 
   useEffect(() => {
     if (user && user.role !== "delivery_staff" && user.role !== "super_admin" && user.role !== "branch_manager") {

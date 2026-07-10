@@ -50,6 +50,7 @@ interface LotterySettings {
   autoRunEnabled: boolean;
   prizeConfig: string;
 }
+interface Branch { id: number; name: string }
 
 const BASE = getApiBase();
 function getToken() { return localStorage.getItem("tg_erp_token"); }
@@ -99,7 +100,11 @@ function makeParticles(count = 60): Particle[] {
 export default function LotteryPage() {
   const { user } = useAuth();
   const { toast } = useToast();
-  const socket = useSocket({ branchId: user?.branchId ?? undefined, userId: user?.id });
+  const [branches, setBranches] = useState<Branch[]>([]);
+  const [selectedBranchId, setSelectedBranchId] = useState<string>("");
+  // Staff tied to one branch always use it; staff without one (e.g. super_admin) pick a branch.
+  const activeBranchId = user?.branchId ?? (selectedBranchId ? parseInt(selectedBranchId, 10) : null);
+  const socket = useSocket({ branchId: activeBranchId ?? undefined, userId: user?.id });
   const [entries, setEntries] = useState<LotteryEntry[]>([]);
   const [draws, setDraws] = useState<LotteryDraw[]>([]);
   const [settings, setSettings] = useState<LotterySettings | null>(null);
@@ -123,13 +128,19 @@ export default function LotteryPage() {
   const today = new Date().toISOString().split("T")[0];
   const todayDraw = draws.find(d => d.drawDate === today);
 
+  useEffect(() => {
+    if (user?.branchId) return; // already scoped to one branch, no picker needed
+    apiFetch("/api/branches").then(rows => setBranches(Array.isArray(rows) ? rows : [])).catch(() => {});
+  }, [user?.branchId]);
+
   const fetchAll = useCallback(async () => {
+    if (!activeBranchId) { setEntries([]); setDraws([]); return; }
     setLoading(true);
     try {
       const [e, d, s] = await Promise.all([
-        apiFetch(`/api/lottery/entries?branchId=${user?.branchId ?? ""}&date=${today}`),
-        apiFetch(`/api/lottery/draws?branchId=${user?.branchId ?? ""}`),
-        user?.branchId ? apiFetch(`/api/lottery/settings/${user.branchId}`) : Promise.resolve(null),
+        apiFetch(`/api/lottery/entries?branchId=${activeBranchId}&date=${today}`),
+        apiFetch(`/api/lottery/draws?branchId=${activeBranchId}`),
+        apiFetch(`/api/lottery/settings/${activeBranchId}`),
       ]);
       setEntries(Array.isArray(e) ? e : []);
       setDraws(Array.isArray(d) ? d : []);
@@ -139,7 +150,7 @@ export default function LotteryPage() {
       }
     } catch { /* ignore */ }
     setLoading(false);
-  }, [user?.branchId, today]);
+  }, [activeBranchId, today]);
 
   useEffect(() => { fetchAll(); const iv = setInterval(fetchAll, 20000); return () => clearInterval(iv); }, [fetchAll]);
 
@@ -160,17 +171,21 @@ export default function LotteryPage() {
   };
 
   const createTodayDraw = async () => {
+    if (!activeBranchId) {
+      toast({ title: "Select a branch first", variant: "destructive" });
+      return;
+    }
     try {
       await apiFetch("/api/lottery/draws", "POST", {
-        branchId: user?.branchId,
+        branchId: activeBranchId,
         drawDate: today,
         drawTime: settings?.drawTime ?? "22:00",
         prizeConfig: settings?.prizeConfig ?? '[{"tier":"First Prize","count":1,"prize":"Free Meal"}]',
       });
       fetchAll();
       toast({ title: "Draw session created for today" });
-    } catch {
-      toast({ title: "Error", variant: "destructive" });
+    } catch (err) {
+      toast({ title: "Could not create draw session", description: err instanceof Error ? err.message : undefined, variant: "destructive" });
     }
   };
 
@@ -223,10 +238,10 @@ export default function LotteryPage() {
   };
 
   const saveSettings = async () => {
-    if (!user?.branchId) return;
+    if (!activeBranchId) { toast({ title: "Select a branch first", variant: "destructive" }); return; }
     setSavingSettings(true);
     try {
-      await apiFetch(`/api/lottery/settings/${user.branchId}`, "PUT", settingsForm);
+      await apiFetch(`/api/lottery/settings/${activeBranchId}`, "PUT", settingsForm);
       toast({ title: "Settings saved" });
       fetchAll();
     } catch {
@@ -351,6 +366,17 @@ export default function LotteryPage() {
               </div>
             </div>
             <div className="flex items-center gap-2">
+              {!user?.branchId && (
+                <select
+                  value={selectedBranchId}
+                  onChange={e => setSelectedBranchId(e.target.value)}
+                  className="text-xs px-3 py-2 rounded-lg border bg-transparent text-zinc-200"
+                  style={{ borderColor: "hsl(38 30% 15%)", background: "hsl(38 30% 6%)" }}
+                >
+                  <option value="">Select branch…</option>
+                  {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                </select>
+              )}
               <div className="text-center px-4 py-2 rounded-xl border" style={{ background: "hsl(38 30% 6%)", borderColor: "hsl(38 30% 15%)" }}>
                 <div className="code-text text-2xl font-black text-amber-400 leading-none">{sentEntries.length}</div>
                 <div className="cinema-subtitle mt-0.5">Entries Today</div>
@@ -458,7 +484,9 @@ export default function LotteryPage() {
                   <p className="cinema-subtitle">{today}</p>
                 </div>
                 {!todayDraw && (
-                  <button onClick={createTodayDraw} className="btn-cinema text-xs">Create Draw Session</button>
+                  <button onClick={createTodayDraw} disabled={!activeBranchId} className="btn-cinema text-xs disabled:opacity-40 disabled:cursor-not-allowed" title={!activeBranchId ? "Select a branch first" : undefined}>
+                    Create Draw Session
+                  </button>
                 )}
               </div>
 

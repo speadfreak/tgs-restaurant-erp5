@@ -16,7 +16,32 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Edit, Trash2, FolderPlus, ImageIcon } from "lucide-react";
+import { Plus, Edit, Trash2, FolderPlus, ImageIcon, Upload, Loader2 } from "lucide-react";
+
+// Resize + compress an uploaded image client-side into a JPEG data URL so photos
+// can be stored directly in photoUrl without needing separate file storage/hosting.
+async function fileToCompressedDataUrl(file: File, maxDim = 900, quality = 0.82): Promise<string> {
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(new Error("Failed to read file"));
+    reader.readAsDataURL(file);
+  });
+  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const el = new Image();
+    el.onload = () => resolve(el);
+    el.onerror = () => reject(new Error("Failed to decode image"));
+    el.src = dataUrl;
+  });
+  const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(img.width * scale);
+  canvas.height = Math.round(img.height * scale);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return dataUrl;
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", quality);
+}
 
 type Category = { id: number; nameEn: string; nameAm: string; sortOrder: number };
 type MenuItem = { id: number; categoryId: number; nameEn: string; nameAm: string; description?: string | null; priceAed: number; available: boolean; photoUrl?: string | null };
@@ -38,6 +63,20 @@ export default function Menu() {
   const [itemDialog, setItemDialog] = useState<{ open: boolean; editing: MenuItem | null }>({ open: false, editing: null });
   const [itemForm, setItemForm] = useState<typeof EMPTY_ITEM>(EMPTY_ITEM);
   const [deleteDialog, setDeleteDialog] = useState<{ type: "cat" | "item"; id: number } | null>(null);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+
+  const handlePhotoFile = async (file: File | undefined) => {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) { toast({ title: "Please choose an image file", variant: "destructive" }); return; }
+    setUploadingPhoto(true);
+    try {
+      const dataUrl = await fileToCompressedDataUrl(file);
+      setItemForm(f => ({ ...f, photoUrl: dataUrl }));
+    } catch {
+      toast({ title: "Could not process image", variant: "destructive" });
+    }
+    setUploadingPhoto(false);
+  };
 
   const createCat = useCreateMenuCategory({ mutation: { onSuccess: () => { toast({ title: "Category created" }); invalidate(); setCatDialog({ open: false, editing: null }); }, onError: () => toast({ title: "Error creating category", variant: "destructive" }) } });
   const updateCat = useUpdateMenuCategory({ mutation: { onSuccess: () => { toast({ title: "Category updated" }); invalidate(); setCatDialog({ open: false, editing: null }); }, onError: () => toast({ title: "Error updating category", variant: "destructive" }) } });
@@ -206,10 +245,21 @@ export default function Menu() {
             <div className="space-y-2"><Label>Description</Label><Textarea value={itemForm.description} onChange={e => setItemForm(f => ({ ...f, description: e.target.value }))} placeholder="Ethiopian spiced chicken stew..." rows={2} /></div>
             <div className="space-y-2"><Label>Price (AED) *</Label><Input type="number" step="0.5" value={itemForm.priceAed} onChange={e => setItemForm(f => ({ ...f, priceAed: e.target.value }))} placeholder="65" /></div>
             <div className="space-y-2">
-              <Label className="flex items-center gap-2"><ImageIcon className="h-3.5 w-3.5" />Photo URL</Label>
+              <Label className="flex items-center gap-2"><ImageIcon className="h-3.5 w-3.5" />Photo</Label>
+              <div className="flex items-center gap-2">
+                <Button type="button" variant="outline" size="sm" disabled={uploadingPhoto} onClick={() => document.getElementById("menu-photo-input")?.click()}>
+                  {uploadingPhoto ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Upload className="h-3.5 w-3.5 mr-1.5" />}
+                  Upload photo
+                </Button>
+                <input id="menu-photo-input" type="file" accept="image/*" className="hidden" onChange={e => { void handlePhotoFile(e.target.files?.[0]); e.target.value = ""; }} />
+                <span className="text-xs text-muted-foreground">or paste a link below</span>
+              </div>
               <Input value={itemForm.photoUrl} onChange={e => setItemForm(f => ({ ...f, photoUrl: e.target.value }))} placeholder="https://example.com/photo.jpg" />
               {itemForm.photoUrl && (
-                <img src={itemForm.photoUrl} alt="Preview" className="w-full h-32 object-cover rounded-md border" onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                <div className="relative w-full">
+                  <img src={itemForm.photoUrl} alt="Preview" className="w-full h-32 object-cover rounded-md border" onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                  <button type="button" onClick={() => setItemForm(f => ({ ...f, photoUrl: "" }))} className="absolute top-1.5 right-1.5 bg-black/60 text-white rounded-full h-6 w-6 flex items-center justify-center text-xs hover:bg-black/80">✕</button>
+                </div>
               )}
             </div>
             <div className="flex items-center gap-3"><Switch checked={itemForm.available} onCheckedChange={v => setItemForm(f => ({ ...f, available: v }))} /><Label>Available</Label></div>
