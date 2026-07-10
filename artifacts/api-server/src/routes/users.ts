@@ -66,6 +66,12 @@ router.patch("/users/:id", async (req, res): Promise<void> => {
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
   const updateData: Record<string, unknown> = { ...parsed.data };
   if (parsed.data.baseSalary !== undefined && parsed.data.baseSalary !== null) updateData.baseSalary = String(parsed.data.baseSalary);
+  // Support password change via PATCH (not in generated schema, handled separately)
+  const rawPassword = (req.body as Record<string, unknown>).password;
+  if (typeof rawPassword === "string" && rawPassword.length >= 6) {
+    updateData.passwordHash = await bcrypt.hash(rawPassword, 10);
+    updateData.passwordChanged = false;
+  }
   const [u] = await db.update(usersTable).set(updateData as any).where(eq(usersTable.id, p.data.id)).returning();
   if (!u) { res.status(404).json({ error: "User not found" }); return; }
   res.json(UpdateUserResponse.parse(mapUser(u)));

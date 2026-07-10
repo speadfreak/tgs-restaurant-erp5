@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import {
   Settings, MessageSquare, Mail, Trophy, Globe, Shield,
-  Eye, EyeOff, Edit2, Check, X, Loader2, Wifi, TestTube, Building2
+  Eye, EyeOff, Edit2, Check, X, Loader2, Wifi, TestTube, Building2, RefreshCw
 } from "lucide-react";
 import { getApiBase } from "@/lib/api-base";
 
@@ -57,6 +57,13 @@ export default function SettingsPage() {
   const [testTo, setTestTo] = useState("");
   const [testResult, setTestResult] = useState<{ key: string; ok: boolean; message: string } | null>(null);
 
+  // Exchange rate state (Addis section)
+  const [exchangeRate, setExchangeRate] = useState<string>("");
+  const [exchangeRateLoading, setExchangeRateLoading] = useState(false);
+  const [exchangeRateSaving, setExchangeRateSaving] = useState(false);
+  const [exchangeRateInput, setExchangeRateInput] = useState<string>("");
+  const [editingRate, setEditingRate] = useState(false);
+
   const fetchSettings = useCallback(async () => {
     setLoading(true);
     try {
@@ -68,6 +75,42 @@ export default function SettingsPage() {
   }, []);
 
   useEffect(() => { fetchSettings(); }, [fetchSettings]);
+
+  const fetchExchangeRate = useCallback(async () => {
+    setExchangeRateLoading(true);
+    try {
+      const res = await apiFetch("/api/addis/exchange-rate");
+      if (res.ok) {
+        const data = await res.json();
+        // Backend returns { fromCurrency, toCurrency, rate: "0.0200" }
+        const rate = data?.rate ?? "";
+        setExchangeRate(String(rate));
+        setExchangeRateInput(String(rate));
+      }
+    } catch { /* ignore */ }
+    setExchangeRateLoading(false);
+  }, []);
+
+  const saveExchangeRate = async () => {
+    const val = parseFloat(exchangeRateInput);
+    if (isNaN(val) || val <= 0) { toast({ title: "Invalid rate", description: "Enter a positive number", variant: "destructive" }); return; }
+    setExchangeRateSaving(true);
+    try {
+      const res = await apiFetch("/api/addis/exchange-rate", "PUT", { fromCurrency: "ETB", toCurrency: "AED", rate: val });
+      if (res.ok) {
+        setExchangeRate(String(val));
+        setEditingRate(false);
+        toast({ title: "Exchange rate saved", description: `1 ETB = ${val} AED` });
+      } else {
+        toast({ title: "Save failed", variant: "destructive" });
+      }
+    } catch { toast({ title: "Save failed", variant: "destructive" }); }
+    setExchangeRateSaving(false);
+  };
+
+  useEffect(() => {
+    if (activeSection === "addis") fetchExchangeRate();
+  }, [activeSection, fetchExchangeRate]);
 
   if (user && user.role !== "super_admin") {
     return <div className="p-8 text-muted-foreground">Super Admin access required.</div>;
@@ -200,6 +243,53 @@ export default function SettingsPage() {
                 </span>
               )}
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Exchange rate card (Addis section only) */}
+      {activeSection === "addis" && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm flex items-center gap-2">
+              <Globe className="h-4 w-4 text-amber-400" /> ETB → AED Exchange Rate
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-xs text-muted-foreground mb-3">
+              Rate used in Addis supply-chain cost calculations. 1 ETB = X AED.
+            </p>
+            {exchangeRateLoading ? (
+              <div className="flex items-center gap-2 text-zinc-500 text-sm"><Loader2 className="h-4 w-4 animate-spin" />Loading...</div>
+            ) : editingRate ? (
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  step="0.0001"
+                  value={exchangeRateInput}
+                  onChange={e => setExchangeRateInput(e.target.value)}
+                  className="h-8 w-36 text-sm font-mono"
+                  placeholder="0.0200"
+                  autoFocus
+                />
+                <Button size="icon" className="h-8 w-8 bg-green-600/20 hover:bg-green-600/30 text-green-400 border border-green-600/30" disabled={exchangeRateSaving} onClick={saveExchangeRate}>
+                  {exchangeRateSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                </Button>
+                <Button size="icon" variant="ghost" className="h-8 w-8 text-zinc-500" onClick={() => { setEditingRate(false); setExchangeRateInput(exchangeRate); }}>
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-3">
+                <span className="font-mono text-amber-400 font-bold text-sm">1 ETB = {exchangeRate || "—"} AED</span>
+                <Button size="icon" variant="ghost" className="h-7 w-7 text-zinc-500 hover:text-amber-400" onClick={() => { setEditingRate(true); setExchangeRateInput(exchangeRate); }} title="Edit rate">
+                  <Edit2 className="h-3.5 w-3.5" />
+                </Button>
+                <Button size="icon" variant="ghost" className="h-7 w-7 text-zinc-500 hover:text-amber-400" onClick={fetchExchangeRate} title="Refresh">
+                  <RefreshCw className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}

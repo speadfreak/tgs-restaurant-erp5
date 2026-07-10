@@ -16,7 +16,7 @@ import { MyTasks } from "@/components/my-tasks";
 import { getApiBase } from "@/lib/api-base";
 
 interface MenuItem {
-  id: number; nameEn: string; nameAm: string; priceAed: number; available: boolean; categoryId: number;
+  id: number; nameEn: string; nameAm: string; priceAed: number; available: boolean; categoryId: number; photoUrl?: string | null;
 }
 interface Category { id: number; nameEn: string }
 interface CartItem { menuItemId: number; name: string; quantity: number; unitPrice: number }
@@ -329,7 +329,7 @@ export default function DeliveryPortal() {
       </header>
 
       <div className="px-4 pt-3 max-w-2xl mx-auto w-full">
-        <MyTasks />
+        <MyTasks socket={socket} />
       </div>
 
       {/* Stats bar */}
@@ -477,7 +477,7 @@ export default function DeliveryPortal() {
                       key={item.id}
                       onClick={() => addToCart(item)}
                       disabled={unavailable}
-                      className={`text-left p-3 rounded-xl border transition-all relative ${
+                      className={`text-left rounded-xl border transition-all relative overflow-hidden ${
                         unavailable
                           ? "border-zinc-800/50 opacity-50 cursor-not-allowed"
                           : inCart
@@ -486,16 +486,21 @@ export default function DeliveryPortal() {
                       }`}
                       style={{ background: unavailable ? "hsl(0 0% 5%)" : inCart ? undefined : "hsl(0 0% 6%)" }}
                     >
-                      {unavailable && (
-                        <span className="absolute top-1.5 right-1.5 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-red-900/60 text-red-400 border border-red-700/30">
-                          Unavailable
-                        </span>
+                      {item.photoUrl && (
+                        <img src={item.photoUrl} alt={item.nameEn} className="w-full h-20 object-cover" onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
                       )}
-                      <div className="font-semibold text-sm text-zinc-100 leading-tight pr-4">{item.nameEn}</div>
-                      {item.nameAm && <div className="text-[10px] text-zinc-600">{item.nameAm}</div>}
-                      <div className="flex items-center justify-between mt-1.5">
-                        <span className={`font-bold text-sm ${unavailable ? "text-zinc-600" : "text-amber-400"}`}>{item.priceAed} AED</span>
-                        {inCart && <span className="text-amber-400 font-black text-sm">×{inCart.quantity}</span>}
+                      <div className="p-3">
+                        {unavailable && (
+                          <span className="absolute top-1.5 right-1.5 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-red-900/60 text-red-400 border border-red-700/30">
+                            Unavailable
+                          </span>
+                        )}
+                        <div className="font-semibold text-sm text-zinc-100 leading-tight pr-4">{item.nameEn}</div>
+                        {item.nameAm && <div className="text-[10px] text-zinc-600">{item.nameAm}</div>}
+                        <div className="flex items-center justify-between mt-1.5">
+                          <span className={`font-bold text-sm ${unavailable ? "text-zinc-600" : "text-amber-400"}`}>{item.priceAed} AED</span>
+                          {inCart && <span className="text-amber-400 font-black text-sm">×{inCart.quantity}</span>}
+                        </div>
                       </div>
                     </button>
                   );

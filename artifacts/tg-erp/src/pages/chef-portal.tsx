@@ -231,7 +231,7 @@ export default function ChefPortal() {
 
       <main className="flex-1 p-4 space-y-8 max-w-6xl mx-auto w-full">
         {/* My Tasks widget */}
-        <MyTasks />
+        <MyTasks socket={socket} />
 
         {/* Stats bar */}
         <div className="grid grid-cols-3 gap-3">

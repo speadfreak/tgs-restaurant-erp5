@@ -5,7 +5,8 @@ import { getIO } from "../lib/socket";
 import { authenticate, requireRole, ADMIN_ROLES } from "../middlewares/auth";
 
 const router: Router = Router();
-router.use(["/activities", "/notes"], authenticate, requireRole(...ADMIN_ROLES));
+// Individual routes apply their own auth; no blanket admin gate here
+// because staff need to read their own tasks and mark them done.
 
 function tryEmitTo(room: string, event: string, data: unknown) {
   try { getIO().to(room).emit(event, data); } catch { /* ignore */ }
@@ -28,21 +29,30 @@ function buildActivity(a: typeof staffActivitiesTable.$inferSelect, assignedTo?:
   };
 }
 
-router.get("/activities", async (req, res): Promise<void> => {
+// GET /activities — any authenticated user can read their own tasks;
+// admin/manager required to list all or filter by branch.
+router.get("/activities", authenticate, async (req, res): Promise<void> => {
   const branchId = req.query.branchId ? parseInt(req.query.branchId as string, 10) : null;
   const userId = req.query.userId ? parseInt(req.query.userId as string, 10) : null;
   const status = req.query.status as string | undefined;
+
+  // Non-admins can only read their own activities (must supply their own userId)
+  if (!ADMIN_ROLES.includes(req.user!.role)) {
+    if (!userId || userId !== req.user!.id) {
+      res.status(403).json({ error: "Forbidden: you can only view your own activities" }); return;
+    }
+  }
+
   let rows = await db.select().from(staffActivitiesTable).orderBy(staffActivitiesTable.createdAt);
   if (branchId) rows = rows.filter(a => a.branchId === branchId);
   if (userId) rows = rows.filter(a => a.assignedToUserId === userId);
   if (status) rows = rows.filter(a => a.status === status);
-  const userIds = [...new Set([...rows.map(a => a.assignedToUserId), ...rows.map(a => a.assignedByUserId).filter(Boolean)])];
   const users = await db.select({ id: usersTable.id, name: usersTable.name }).from(usersTable);
   const userMap = new Map(users.map(u => [u.id, u]));
   res.json(rows.map(a => buildActivity(a, userMap.get(a.assignedToUserId), a.assignedByUserId ? userMap.get(a.assignedByUserId!) : null)));
 });
 
-router.post("/activities", async (req, res): Promise<void> => {
+router.post("/activities", authenticate, requireRole(...ADMIN_ROLES), async (req, res): Promise<void> => {
   const { assignedToUserId, assignedByUserId, branchId, title, dueDate, relatedEntityType, relatedEntityId } = req.body;
   if (!assignedToUserId || !branchId || !title) {
     res.status(400).json({ error: "assignedToUserId, branchId, title required" }); return;
@@ -61,7 +71,8 @@ router.post("/activities", async (req, res): Promise<void> => {
   res.status(201).json(result);
 });
 
-router.patch("/activities/:id/done", async (req, res): Promise<void> => {
+// PATCH /activities/:id/done — any authenticated user can mark a task done
+router.patch("/activities/:id/done", authenticate, async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
   const [a] = await db.update(staffActivitiesTable).set({ status: "done" }).where(eq(staffActivitiesTable.id, id)).returning();
@@ -71,7 +82,7 @@ router.patch("/activities/:id/done", async (req, res): Promise<void> => {
   res.json(buildActivity(a, userMap.get(a.assignedToUserId), a.assignedByUserId ? userMap.get(a.assignedByUserId!) : null));
 });
 
-router.delete("/activities/:id", async (req, res): Promise<void> => {
+router.delete("/activities/:id", authenticate, requireRole(...ADMIN_ROLES), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
   await db.delete(staffActivitiesTable).where(eq(staffActivitiesTable.id, id));
@@ -79,7 +90,7 @@ router.delete("/activities/:id", async (req, res): Promise<void> => {
 });
 
 // Record notes (activity timeline "chatter")
-router.get("/notes", async (req, res): Promise<void> => {
+router.get("/notes", authenticate, requireRole(...ADMIN_ROLES), async (req, res): Promise<void> => {
   const { entityType, entityId } = req.query;
   if (!entityType || !entityId) { res.status(400).json({ error: "entityType and entityId required" }); return; }
   const rows = await db.select().from(recordNotesTable)
@@ -94,7 +105,7 @@ router.get("/notes", async (req, res): Promise<void> => {
   })));
 });
 
-router.post("/notes", async (req, res): Promise<void> => {
+router.post("/notes", authenticate, requireRole(...ADMIN_ROLES), async (req, res): Promise<void> => {
   const { entityType, entityId, authorId, note } = req.body;
   if (!entityType || !entityId || !note) {
     res.status(400).json({ error: "entityType, entityId, note required" }); return;

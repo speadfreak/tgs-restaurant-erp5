@@ -4,7 +4,9 @@ import { Badge } from "@/components/ui/badge";
 import { CheckCircle2, ClipboardList, Clock } from "lucide-react";
 import { format } from "date-fns";
 import { useAuth } from "@/lib/auth";
+import { useToast } from "@/hooks/use-toast";
 import { getApiBase } from "@/lib/api-base";
+import type { Socket } from "socket.io-client";
 
 interface Activity {
   id: number; title: string; dueDate: string | null; status: string;
@@ -23,8 +25,9 @@ async function apiFetch(path: string, method = "GET", body?: unknown) {
   return res.json();
 }
 
-export function MyTasks() {
+export function MyTasks({ socket }: { socket?: Socket }) {
   const { user } = useAuth();
+  const { toast } = useToast();
   const [tasks, setTasks] = useState<Activity[]>([]);
   const [loading, setLoading] = useState(true);
   const [marking, setMarking] = useState<Record<number, boolean>>({});
@@ -40,6 +43,20 @@ export function MyTasks() {
   }, [user?.id]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Real-time: when a new task is assigned to me, refresh and notify
+  useEffect(() => {
+    if (!socket) return;
+    const handler = (activity: { title?: string }) => {
+      load();
+      toast({
+        title: "📋 New task assigned to you!",
+        description: activity?.title ?? "Check your task list.",
+      });
+    };
+    socket.on("activity:assigned", handler);
+    return () => { socket.off("activity:assigned", handler); };
+  }, [socket, load, toast]);
 
   const markDone = async (id: number) => {
     setMarking(m => ({ ...m, [id]: true }));

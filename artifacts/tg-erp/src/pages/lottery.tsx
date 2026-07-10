@@ -481,6 +481,12 @@ export default function LotteryPage() {
                     </div>
                   </div>
 
+                  {todayDraw.status !== "completed" && sentEntries.length === 0 && (
+                    <div className="rounded-xl border border-amber-700/30 bg-amber-950/10 p-4 text-sm text-amber-300/80">
+                      <strong>No eligible entries yet.</strong> Go to the <button onClick={() => setTab("live")} className="underline hover:text-amber-400">Today's Numbers</button> tab, then mark each sent lucky number as "sent" using the toggle. Once at least one is marked, the draw button will appear here.
+                    </div>
+                  )}
+
                   {todayDraw.status !== "completed" && sentEntries.length > 0 && (
                     <>
                       {showConfirm ? (
