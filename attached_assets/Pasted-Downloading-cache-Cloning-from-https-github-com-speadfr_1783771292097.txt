@@ -1,0 +1,37 @@
+Downloading cache...
+==> Cloning from https://github.com/speadfreak/tgs-restaurant-erp5
+==> Checking out commit d41ffcbb3293569033465de4390c37b8838b5c83 in branch main
+==> Downloaded 124MB in 2s. Extraction took 7s.
+==> Using Node.js version 24.14.1 (default)
+==> Docs on specifying a Node.js version: https://render.com/docs/node-version
+==> Running build command 'pnpm install --frozen-lockfile; pnpm run build'...
+> @workspace/api-server@0.0.0 build /opt/render/project/src/artifacts/api-server
+> node ./build.mjs
+  dist/index.mjs                       5.2mb ⚠️
+  dist/pino-worker.mjs               153.4kb
+  dist/pino-file.mjs                 142.1kb
+  dist/pino-pretty.mjs               114.6kb
+  dist/thread-stream-worker.mjs        7.3kb
+  dist/index.mjs.map                   9.0mb
+  dist/pino-worker.mjs.map           256.9kb
+  dist/pino-file.mjs.map             229.0kb
+  dist/pino-pretty.mjs.map           204.0kb
+  dist/thread-stream-worker.mjs.map   12.0kb
+⚡ Done in 926ms
+==> Uploading build...
+==> Uploaded in 5.3s. Compression took 4.8s
+==> Build successful 🎉
+==> Deploying...
+==> Setting WEB_CONCURRENCY=1 by default, based on available CPUs in the instance
+==> Running 'node dist/index.mjs'
+==> Your service is live 🎉
+==> 
+==> ///////////////////////////////////////////////////////////
+==> 
+==> Available at your primary URL https://tgs-restaurant-erp5.onrender.com
+==> 
+==> ///////////////////////////////////////////////////////////
+{"level":30,"time":1783771255020,"pid":76,"hostname":"srv-d96c8blckfvc73f97ld0-hibernate-6f6d7d9c9f-m7trm","port":3000,"msg":"Server listening with Socket.IO"}
+[Cron] Phase 4+8 cron jobs scheduled (draw@18UTC, retry@*/15, reset@20UTC, overdue@05UTC, backup@Sun20UTC)
+{"level":30,"time":1783771255919,"pid":76,"hostname":"srv-d96c8blckfvc73f97ld0-hibernate-6f6d7d9c9f-m7trm","req":{"id":1,"method":"HEAD","url":"/"},"res":{"statusCode":404},"responseTime":4,"msg":"request completed"}
+{"level":30,"time":1783771259476,"pid":76,"hostname":"srv-d96c8blckfvc73f97ld0-hibernate-6f6d7d9c9f-m7trm","req":{"id":2,"method":"GET","url":"/"},"res":{"statusCode":404},"responseTime":1,"msg":"request completed"}
