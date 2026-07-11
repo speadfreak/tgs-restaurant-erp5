@@ -136,9 +136,9 @@ export default function DeliveryPortal() {
       const todayDone = data.filter(o => o.status === "delivered" && new Date(o.createdAt).toDateString() === today
         && (o.assignedDeliveryUserId === user?.id || o.relayedByUserId === user?.id));
       setTodayStats({ completed: todayDone.length, commission: todayDone.length * 5 });
-      const myReady = data.filter(o => o.status === "ready" && o.relayedByUserId === user?.id);
-      if (myReady.length > prevReadyCountRef.current) playReadyAlert();
-      prevReadyCountRef.current = myReady.length;
+      const readyCount = data.filter(o => o.status === "ready" && !o.assignedDeliveryUserId).length;
+      if (readyCount > prevReadyCountRef.current) playReadyAlert();
+      prevReadyCountRef.current = readyCount;
     } catch { /* ignore */ }
     setLoadingOrders(false);
   }, [user?.branchId, user?.id]);
@@ -159,13 +159,13 @@ export default function DeliveryPortal() {
       setActiveTab("deliveries");
       fetchOrders();
     });
-    socket.on("order:ready", (data: { orderId: number; relayedByUserId?: number; orderCode: string; customerName?: string }) => {
-      if (data.relayedByUserId === user?.id || !data.relayedByUserId) {
-        playReadyAlert();
-        toast({ title: `Order ${data.orderCode} is Ready!`, description: `${data.customerName ?? "Customer"} — pick up now` });
-        setActiveTab("deliveries");
-        fetchOrders();
-      }
+    socket.on("order:ready", (data: { orderId: number; orderCode: string; customerName?: string }) => {
+      // Every rider on the branch is notified — ready orders are a shared pool,
+      // not routed only to whoever relayed the order.
+      playReadyAlert();
+      toast({ title: `Order ${data.orderCode} is Ready!`, description: `${data.customerName ?? "Customer"} — claim it now` });
+      setActiveTab("deliveries");
+      fetchOrders();
     });
     socket.on("order:claimed", ({ orderId }: { orderId: number }) => {
       setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: "assigned" } : o));
@@ -287,12 +287,17 @@ export default function DeliveryPortal() {
     setActionPending(p => ({ ...p, [id]: false }));
   };
 
-  const myOrders = orders.filter(o => o.relayedByUserId === user?.id || o.assignedDeliveryUserId === user?.id);
-  const sharedPool = orders.filter(o => o.status === "ready" && !o.assignedDeliveryUserId && o.relayedByUserId !== user?.id);
-  const active = myOrders.filter(o => !["delivered", "failed"].includes(o.status));
+  // Ready-but-unclaimed orders are a shared pool: EVERY deliveryman on the branch sees
+  // every one of them — including ones they themselves relayed — so any available rider
+  // can claim it. Nobody "owns" a ready order until they hit Claim.
+  const readyToClaim = orders.filter(o => o.status === "ready" && !o.assignedDeliveryUserId);
+  // Once claimed, the order belongs to that rider and moves into their own active list.
+  const active = orders.filter(o => o.assignedDeliveryUserId === user?.id && ["assigned", "out_for_delivery"].includes(o.status));
+  // History: orders this rider delivered, or relayed themselves (so they can see how their own relay turned out).
   // Use updatedAt (= last status-change time) as the delivery-completion timestamp
   // since createdAt is the order creation time, not when it was delivered.
-  const recentlyDelivered = myOrders.filter(o => o.status === "delivered"
+  const recentlyDelivered = orders.filter(o => o.status === "delivered"
+    && (o.assignedDeliveryUserId === user?.id || o.relayedByUserId === user?.id)
     && new Date(o.updatedAt ?? o.createdAt).toDateString() === new Date().toDateString());
 
   if (isLoading) return (
@@ -339,9 +344,9 @@ export default function DeliveryPortal() {
       <div className="border-y px-4 py-2 flex gap-6 text-sm" style={{ borderColor: "hsl(0 0% 10%)", background: "hsl(0 0% 5%)" }}>
         <span className="text-zinc-600 text-xs">Today: <span className="font-black text-zinc-200">{todayStats.completed}</span> delivered</span>
         <span className="text-zinc-600 text-xs">Commission: <span className="font-black text-amber-400">{todayStats.commission} AED</span></span>
-        {sharedPool.length > 0 && (
+        {readyToClaim.length > 0 && (
           <span className="flex items-center gap-1 text-emerald-400 font-bold text-xs animate-pulse">
-            <Bell className="h-3 w-3" />{sharedPool.length} ready to claim
+            <Bell className="h-3 w-3" />{readyToClaim.length} ready to claim
           </span>
         )}
         {active.length > 0 && (
@@ -553,12 +558,12 @@ export default function DeliveryPortal() {
 
           {/* ── DELIVERIES TAB ── */}
           <TabsContent value="deliveries" className="p-4 space-y-5">
-            {sharedPool.length > 0 && (
+            {readyToClaim.length > 0 && (
               <div className="space-y-2.5">
                 <h3 className="font-bold text-emerald-400 flex items-center gap-2 text-sm">
-                  <Bell className="h-4 w-4 animate-pulse" />Ready to Claim ({sharedPool.length})
+                  <Bell className="h-4 w-4 animate-pulse" />Ready to Claim ({readyToClaim.length})
                 </h3>
-                {sharedPool.map(order => (
+                {readyToClaim.map(order => (
                   <div key={order.id} className="queue-card" data-urgency="ok" style={{ borderLeftColor: "hsl(142 70% 45%)" }}>
                     <div className="flex justify-between items-start mb-2">
                       <div>
@@ -637,11 +642,6 @@ export default function DeliveryPortal() {
                           </Button>
                         </>
                       )}
-                      {order.status === "ready" && (
-                        <div className="flex-1 h-9 flex items-center justify-center text-xs text-amber-400/70 border border-amber-500/20 rounded-lg">
-                          Kitchen preparing — wait for notification
-                        </div>
-                      )}
                     </div>
                   </div>
                 ))}
@@ -704,7 +704,7 @@ export default function DeliveryPortal() {
               </div>
             )}
 
-            {sharedPool.length === 0 && active.length === 0 && recentlyDelivered.length === 0 && (
+            {readyToClaim.length === 0 && active.length === 0 && recentlyDelivered.length === 0 && (
               loadingOrders ? (
                 <div className="text-center py-6 text-zinc-600 text-xs animate-pulse">Checking for orders...</div>
               ) : null
