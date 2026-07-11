@@ -13,7 +13,8 @@ const SENSITIVE_KEYS = new Set([
   "twilio_auth_token",
   "sendgrid_api_key",
   "webhook_verification_token",
-  "google_drive_private_key",
+  "google_drive_client_secret",
+  "google_drive_refresh_token",
 ]);
 
 const SETTING_DEFAULTS: Record<string, { label: string; isSensitive: boolean; section: string; description?: string }> = {
@@ -55,9 +56,11 @@ const SETTING_DEFAULTS: Record<string, { label: string; isSensitive: boolean; se
   teams_notify_lottery:            { label: "Notify on Lottery Draw",           isSensitive: false, section: "microsoft", description: "Post a card to Teams when the daily lottery draw completes (true/false)" },
   teams_notify_large_expense:      { label: "Notify on Large Expense",          isSensitive: false, section: "microsoft", description: "Post a card to Teams when an expense exceeds this AED amount (0 = disabled)" },
   excel_auto_export_enabled:       { label: "Enable Scheduled Excel Exports",   isSensitive: false, section: "microsoft", description: "Automatically generate and send daily .xlsx reports (true/false)" },
-  // Google Drive backup
-  google_drive_client_email:       { label: "Service Account Email",            isSensitive: false, section: "google_drive", description: "The client_email from your Google Service Account JSON key" },
-  google_drive_private_key:        { label: "Service Account Private Key",      isSensitive: true,  section: "google_drive", description: "The private_key from your Google Service Account JSON (paste the full key including -----BEGIN/END PRIVATE KEY-----)" },
+  // Google Drive backup (OAuth 2.0 — a real Google account's own refresh token,
+  // not a service account, since service accounts have no storage quota)
+  google_drive_client_id:          { label: "OAuth Client ID",                  isSensitive: false, section: "google_drive", description: "The Client ID from your Google Cloud OAuth 2.0 Client (APIs & Services → Credentials)" },
+  google_drive_client_secret:      { label: "OAuth Client Secret",              isSensitive: true,  section: "google_drive", description: "The Client Secret from the same OAuth 2.0 Client" },
+  google_drive_refresh_token:      { label: "OAuth Refresh Token",              isSensitive: true,  section: "google_drive", description: "The refresh token obtained via Google OAuth Playground for your own Google account, scope drive.file" },
   google_drive_folder_id:          { label: "Google Drive Folder ID",           isSensitive: false, section: "google_drive", description: "The ID from the Google Drive folder URL where backups will be saved (the part after /folders/ in the URL)" },
   google_drive_enabled:            { label: "Enable Auto Weekly Backup",        isSensitive: false, section: "google_drive", description: "Toggle to enable/disable the automatic Sunday midnight backup (true/false)" },
   backup_notify_whatsapp:          { label: "WhatsApp Notification Number",     isSensitive: false, section: "google_drive", description: "Phone number to notify when backup completes (include country code)" },

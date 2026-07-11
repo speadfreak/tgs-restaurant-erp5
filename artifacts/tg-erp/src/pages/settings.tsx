@@ -407,7 +407,7 @@ export default function SettingsPage() {
             </CardHeader>
             <CardContent>
               <p className="text-xs text-muted-foreground mb-3">
-                Configure the Service Account credentials below (see setup guide), then test the connection.
+                Configure the OAuth credentials below (see setup guide), then test the connection. This uses your own Google account's storage — Google service accounts have no storage quota of their own and cannot upload files.
               </p>
               <div className="flex flex-wrap items-center gap-3">
                 <Button
@@ -439,14 +439,16 @@ export default function SettingsPage() {
                   <li>Go to <a href="https://console.cloud.google.com" target="_blank" rel="noreferrer" className="text-amber-400 underline">console.cloud.google.com</a></li>
                   <li>Create a new project (or use an existing one)</li>
                   <li>Enable "Google Drive API" in APIs & Services → Library</li>
-                  <li>Go to APIs & Services → Credentials → Create Credentials → Service Account</li>
-                  <li>Name it "tgs-restaurant-backup" → Create</li>
-                  <li>Click the service account → Keys tab → Add Key → JSON → Download</li>
-                  <li>Open the downloaded JSON file: copy <code className="text-amber-300">client_email</code> into "Service Account Email" below, and <code className="text-amber-300">private_key</code> into "Service Account Private Key" below</li>
-                  <li>In Google Drive, create a folder called "TG Restaurant Backups"</li>
-                  <li>Right-click the folder → Share → paste the client_email → give Editor access</li>
+                  <li>Go to APIs & Services → OAuth consent screen → set User type "External", add your own Gmail as a Test user, and add the <code className="text-amber-300">.../auth/drive.file</code> scope</li>
+                  <li>Go to APIs & Services → Credentials → Create Credentials → OAuth client ID → Application type "Web application"</li>
+                  <li>Under "Authorized redirect URIs" add <code className="text-amber-300">https://developers.google.com/oauthplayground</code></li>
+                  <li>Copy the resulting <code className="text-amber-300">Client ID</code> and <code className="text-amber-300">Client Secret</code> into the fields below</li>
+                  <li>Open <a href="https://developers.google.com/oauthplayground" target="_blank" rel="noreferrer" className="text-amber-400 underline">developers.google.com/oauthplayground</a> → click the gear icon → check "Use your own OAuth credentials" → paste in the same Client ID/Secret</li>
+                  <li>In Step 1, find and select the scope <code className="text-amber-300">https://www.googleapis.com/auth/drive.file</code> → Authorize APIs → sign in with your own Google account</li>
+                  <li>In Step 2, click "Exchange authorization code for tokens" → copy the <code className="text-amber-300">Refresh token</code> into "OAuth Refresh Token" below</li>
+                  <li>In Google Drive, create a folder called "TG Restaurant Backups" (in your own Drive — no need to share it with anyone)</li>
                   <li>Open the folder and copy the ID from the URL (the part after <code className="text-amber-300">/folders/</code>) into "Google Drive Folder ID" below</li>
-                  <li>Click "Test Connection" above to verify — it should show "Connected as: your-service-account@..."</li>
+                  <li>Click "Test Connection" above to verify — it should show "Connected as: your-own-email@gmail.com"</li>
                 </ol>
               )}
             </CardContent>

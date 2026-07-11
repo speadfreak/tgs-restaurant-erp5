@@ -1,7 +1,14 @@
 /**
- * Google Drive API v3 client using a Service Account — no interactive OAuth
- * needed, works entirely server-side. Credentials come from Settings
- * (google_drive_client_email / google_drive_private_key / google_drive_folder_id),
+ * Google Drive API v3 client using OAuth 2.0 (a real Google account's own
+ * refresh token) — NOT a service account. Service accounts have 0 storage
+ * quota of their own, so uploads always fail with "Service Accounts do not
+ * have storage quota" unless routed through a Workspace Shared Drive or
+ * domain-wide delegation, neither of which is available on a personal Gmail
+ * account. Authenticating as a real user's OAuth client instead lets uploads
+ * use that account's normal Drive storage.
+ *
+ * Credentials come from Settings (google_drive_client_id /
+ * google_drive_client_secret / google_drive_refresh_token / google_drive_folder_id),
  * matching the same encrypted-settings pattern used for Twilio/SendGrid/Teams.
  */
 import { google } from "googleapis";
@@ -9,21 +16,17 @@ import { Readable } from "stream";
 import { getSetting } from "./settings";
 
 export async function getGoogleDriveClient() {
-  const clientEmail = await getSetting("google_drive_client_email");
-  const privateKey = await getSetting("google_drive_private_key");
+  const clientId = await getSetting("google_drive_client_id");
+  const clientSecret = await getSetting("google_drive_client_secret");
+  const refreshToken = await getSetting("google_drive_refresh_token");
   const folderId = await getSetting("google_drive_folder_id");
 
-  if (!clientEmail || !privateKey) {
-    throw new Error("Google Drive credentials not configured in Settings → Google Drive & Backup");
+  if (!clientId || !clientSecret || !refreshToken) {
+    throw new Error("Google Drive OAuth credentials not configured in Settings → Google Drive & Backup");
   }
 
-  const auth = new google.auth.GoogleAuth({
-    credentials: {
-      client_email: clientEmail,
-      private_key: privateKey.replace(/\\n/g, "\n"), // fix escaped newlines from pasted JSON
-    },
-    scopes: ["https://www.googleapis.com/auth/drive.file"],
-  });
+  const auth = new google.auth.OAuth2(clientId, clientSecret);
+  auth.setCredentials({ refresh_token: refreshToken });
 
   const drive = google.drive({ version: "v3", auth });
   return { drive, folderId };
