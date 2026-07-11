@@ -1,0 +1,682 @@
+# PHASE 8 — TG's Restaurant ERP: Automatic Weekly Google Drive Backup + Database Clear Engine
+### (ቲጂ ምግብ ቤት — Replit Agent Brief)
+
+Read every section fully before writing a single line of code. This phase adds a powerful automatic weekly backup system that exports all operational data to Google Drive as Excel files, then clears the database — keeping the Neon free tier alive forever while preserving all historical data safely in Google Drive.
+
+---
+
+## 0. WHAT THIS SYSTEM DOES
+
+Every Sunday at midnight UAE time (UTC+4 = 20:00 UTC Saturday):
+1. Exports all operational/transactional tables to one Excel file (multiple sheets)
+2. Uploads the Excel file to a configured Google Drive folder automatically
+3. Clears the exported data from the database
+4. Sends a notification to the admin (WhatsApp + Teams if configured)
+5. Logs the backup in a `backup_logs` table
+
+The admin can also trigger this manually anytime from the Settings page with one click.
+
+**Data that IS backed up and cleared weekly:**
+- orders + order_items + order_status_history
+- deliveries
+- lottery_entries + lottery_draws + lottery_winners
+- finance_entries + expenses
+- commissions
+- timesheets
+- whatsapp_messages
+- import_shipments + import_shipment_items + import_payments
+- audit_logs
+- login_attempts
+- staff_activities (completed ones only)
+
+**Data that is NEVER touched:**
+- users (staff accounts, phones, hashed passwords, roles)
+- branches
+- menu_items + menu_categories
+- inventory_items
+- suppliers_addis
+- settings
+- restock_orders (pending ones stay)
+- customers (kept for history — phone numbers needed for lottery)
+
+---
+
+## 1. GOOGLE DRIVE API SETUP (Backend)
+
+### 1.1 Install required packages
+
+```bash
+pnpm add googleapis exceljs --filter @workspace/api-server
+```
+
+### 1.2 Google Drive Authentication
+
+Use Google Drive API v3 with a **Service Account** (not OAuth — service accounts work server-side without user interaction).
+
+Create a utility file `artifacts/api-server/src/lib/google-drive.ts`:
+
+```typescript
+import { google } from 'googleapis';
+import { Readable } from 'stream';
+
+export async function getGoogleDriveClient() {
+  const clientEmail = await getSetting('google_drive_client_email');
+  const privateKey = await getSetting('google_drive_private_key');
+  const folderId = await getSetting('google_drive_folder_id');
+
+  if (!clientEmail || !privateKey) {
+    throw new Error('Google Drive credentials not configured in Settings');
+  }
+
+  const auth = new google.auth.GoogleAuth({
+    credentials: {
+      client_email: clientEmail,
+      private_key: privateKey.replace(/\\n/g, '\n'), // fix escaped newlines
+    },
+    scopes: ['https://www.googleapis.com/auth/drive.file'],
+  });
+
+  const drive = google.drive({ version: 'v3', auth });
+  return { drive, folderId };
+}
+
+export async function uploadFileToDrive(
+  fileName: string,
+  buffer: Buffer,
+  mimeType: string,
+  folderId: string | null
+): Promise<{ fileId: string; webViewLink: string }> {
+  const { drive } = await getGoogleDriveClient();
+
+  const fileMetadata: any = { name: fileName };
+  if (folderId) fileMetadata.parents = [folderId];
+
+  const media = {
+    mimeType,
+    body: Readable.from(buffer),
+  };
+
+  const response = await drive.files.create({
+    requestBody: fileMetadata,
+    media,
+    fields: 'id, webViewLink',
+  });
+
+  return {
+    fileId: response.data.id!,
+    webViewLink: response.data.webViewLink!,
+  };
+}
+```
+
+---
+
+## 2. EXCEL BACKUP GENERATOR
+
+Create `artifacts/api-server/src/lib/backup-generator.ts`:
+
+```typescript
+import ExcelJS from 'exceljs';
+import { db } from '@workspace/db';
+import { 
+  orders, orderItems, orderStatusHistory,
+  deliveries, lotteryEntries, lotteryDraws, lotteryWinners,
+  financeEntries, expenses, commissions, timesheets,
+  whatsappMessages, importShipments, importShipmentItems,
+  importPayments, auditLogs, loginAttempts
+} from '@workspace/db/schema';
+
+export async function generateBackupExcel(weekLabel: string): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+
+  // Workbook metadata
+  workbook.creator = "TG's Restaurant ERP (ቲጂ ምግብ ቤት)";
+  workbook.created = new Date();
+  workbook.title = `TG's Restaurant Weekly Backup — ${weekLabel}`;
+
+  // Style helper
+  const headerStyle: Partial<ExcelJS.Style> = {
+    font: { bold: true, color: { argb: 'FFFFFFFF' } },
+    fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFB45309' } }, // amber
+    alignment: { horizontal: 'center' },
+    border: {
+      bottom: { style: 'medium', color: { argb: 'FF92400E' } }
+    }
+  };
+
+  async function addSheet(name: string, data: any[], columns: { header: string; key: string; width: number }[]) {
+    const sheet = workbook.addWorksheet(name);
+
+    // Title row
+    sheet.mergeCells(1, 1, 1, columns.length);
+    const titleCell = sheet.getCell('A1');
+    titleCell.value = `TG's Restaurant — ${name} — Week of ${weekLabel}`;
+    titleCell.font = { bold: true, size: 13, color: { argb: 'FFB45309' } };
+    titleCell.alignment = { horizontal: 'center' };
+    sheet.getRow(1).height = 25;
+
+    // Column headers
+    sheet.columns = columns.map(c => ({ header: c.header, key: c.key, width: c.width }));
+    const headerRow = sheet.getRow(2);
+    headerRow.values = columns.map(c => c.header);
+    headerRow.eachCell(cell => Object.assign(cell, headerStyle));
+    headerRow.height = 20;
+
+    // Data rows
+    data.forEach((row, i) => {
+      const dataRow = sheet.addRow(columns.map(c => row[c.key] ?? ''));
+      // Alternating row colors
+      if (i % 2 === 0) {
+        dataRow.eachCell(cell => {
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF9FAFB' } };
+        });
+      }
+    });
+
+    // Auto-filter
+    sheet.autoFilter = { from: { row: 2, column: 1 }, to: { row: 2, column: columns.length } };
+
+    return sheet;
+  }
+
+  // ── ORDERS SHEET ──
+  const ordersData = await db.select().from(orders);
+  await addSheet('Orders', ordersData, [
+    { header: 'Order Code', key: 'orderCode', width: 18 },
+    { header: 'Channel', key: 'channel', width: 16 },
+    { header: 'Status', key: 'status', width: 16 },
+    { header: 'Customer Name', key: 'customerName', width: 20 },
+    { header: 'Customer Phone', key: 'customerPhone', width: 18 },
+    { header: 'Delivery Address', key: 'deliveryAddress', width: 30 },
+    { header: 'Total (AED)', key: 'totalAed', width: 14 },
+    { header: 'Branch ID', key: 'branchId', width: 12 },
+    { header: 'Created At', key: 'createdAt', width: 22 },
+    { header: 'Accepted At', key: 'acceptedAt', width: 22 },
+    { header: 'Ready At', key: 'markedReadyAt', width: 22 },
+    { header: 'Delivered At', key: 'deliveredAt', width: 22 },
+  ]);
+
+  // ── ORDER ITEMS SHEET ──
+  const orderItemsData = await db.select().from(orderItems);
+  await addSheet('Order Items', orderItemsData, [
+    { header: 'Order ID', key: 'orderId', width: 12 },
+    { header: 'Menu Item ID', key: 'menuItemId', width: 14 },
+    { header: 'Quantity', key: 'quantity', width: 10 },
+    { header: 'Unit Price (AED)', key: 'unitPrice', width: 16 },
+    { header: 'Notes', key: 'notes', width: 30 },
+  ]);
+
+  // ── DELIVERIES SHEET ──
+  const deliveriesData = await db.select().from(deliveries);
+  await addSheet('Deliveries', deliveriesData, [
+    { header: 'Order ID', key: 'orderId', width: 12 },
+    { header: 'Rider ID', key: 'deliveryStaffId', width: 12 },
+    { header: 'Status', key: 'deliveryStatus', width: 16 },
+    { header: 'Picked Up At', key: 'pickedUpAt', width: 22 },
+    { header: 'Delivered At', key: 'deliveredAt', width: 22 },
+    { header: 'Amount Collected (AED)', key: 'amountCollected', width: 22 },
+  ]);
+
+  // ── LOTTERY SHEET ──
+  const lotteryData = await db.select().from(lotteryEntries);
+  await addSheet('Lottery Entries', lotteryData, [
+    { header: 'Order ID', key: 'orderId', width: 12 },
+    { header: 'Customer Phone', key: 'customerPhone', width: 18 },
+    { header: 'Customer Name', key: 'customerName', width: 20 },
+    { header: 'Lucky Number', key: 'luckyNumber', width: 14 },
+    { header: 'Draw Date', key: 'drawDate', width: 14 },
+    { header: 'Is Winner', key: 'isWinner', width: 10 },
+    { header: 'Prize Tier', key: 'prizeTier', width: 16 },
+    { header: 'Manually Sent', key: 'manuallySent', width: 14 },
+  ]);
+
+  // ── FINANCE ENTRIES SHEET ──
+  const financeData = await db.select().from(financeEntries);
+  await addSheet('Finance Entries', financeData, [
+    { header: 'Type', key: 'entryType', width: 10 },
+    { header: 'Category', key: 'category', width: 20 },
+    { header: 'Amount (AED)', key: 'amountAed', width: 14 },
+    { header: 'Description', key: 'description', width: 30 },
+    { header: 'Date', key: 'entryDate', width: 14 },
+    { header: 'Branch ID', key: 'branchId', width: 12 },
+    { header: 'Logged By', key: 'loggedByUserId', width: 14 },
+  ]);
+
+  // ── EXPENSES SHEET ──
+  const expensesData = await db.select().from(expenses);
+  await addSheet('Expenses', expensesData, [
+    { header: 'Category', key: 'category', width: 20 },
+    { header: 'Amount (AED)', key: 'amountAed', width: 14 },
+    { header: 'Description', key: 'description', width: 30 },
+    { header: 'Branch ID', key: 'branchId', width: 12 },
+    { header: 'Created At', key: 'createdAt', width: 22 },
+  ]);
+
+  // ── COMMISSIONS SHEET ──
+  const commissionsData = await db.select().from(commissions);
+  await addSheet('Commissions', commissionsData, [
+    { header: 'Staff ID', key: 'userId', width: 12 },
+    { header: 'Order ID', key: 'orderId', width: 12 },
+    { header: 'Amount (AED)', key: 'amountAed', width: 14 },
+    { header: 'Type', key: 'type', width: 14 },
+    { header: 'Created At', key: 'createdAt', width: 22 },
+  ]);
+
+  // ── IMPORT SHIPMENTS SHEET ──
+  const shipmentsData = await db.select().from(importShipments);
+  await addSheet('Import Shipments', shipmentsData, [
+    { header: 'Reference', key: 'reference', width: 20 },
+    { header: 'Supplier ID', key: 'supplierId', width: 14 },
+    { header: 'Sent Date', key: 'sentDate', width: 14 },
+    { header: 'Status', key: 'status', width: 16 },
+    { header: 'Total (ETB)', key: 'totalValueEtb', width: 14 },
+    { header: 'Total (AED)', key: 'totalValueAed', width: 14 },
+    { header: 'Notes', key: 'notes', width: 30 },
+  ]);
+
+  // ── WHATSAPP MESSAGES SHEET ──
+  const waData = await db.select().from(whatsappMessages);
+  await addSheet('WhatsApp Messages', waData, [
+    { header: 'Direction', key: 'direction', width: 12 },
+    { header: 'Customer Phone', key: 'customerPhone', width: 18 },
+    { header: 'Message Type', key: 'messageType', width: 14 },
+    { header: 'Content', key: 'content', width: 40 },
+    { header: 'Status', key: 'status', width: 12 },
+    { header: 'Sent At', key: 'sentAt', width: 22 },
+  ]);
+
+  // Write to buffer
+  const buffer = await workbook.xlsx.writeBuffer();
+  return Buffer.from(buffer);
+}
+```
+
+---
+
+## 3. BACKUP + CLEAR ENGINE
+
+Create `artifacts/api-server/src/lib/weekly-backup.ts`:
+
+```typescript
+import { generateBackupExcel } from './backup-generator';
+import { uploadFileToDrive } from './google-drive';
+import { getSetting } from './settings';
+import { sendTeamsNotification } from './teams';
+import { db } from '@workspace/db';
+import {
+  orders, orderItems, orderStatusHistory,
+  deliveries, lotteryEntries, lotteryDraws, lotteryWinners,
+  financeEntries, expenses, commissions, timesheets,
+  whatsappMessages, importShipments, importShipmentItems,
+  importPayments, auditLogs, loginAttempts, backupLogs
+} from '@workspace/db/schema';
+
+export async function runWeeklyBackup(): Promise<{
+  success: boolean;
+  fileId?: string;
+  webViewLink?: string;
+  error?: string;
+  rowsCleared: number;
+}> {
+  const now = new Date();
+  const weekLabel = now.toISOString().split('T')[0]; // e.g. "2026-07-11"
+  const fileName = `TG-Restaurant-Backup-Week-${weekLabel}.xlsx`;
+
+  let rowsCleared = 0;
+
+  try {
+    // Step 1 — Generate Excel
+    console.log('[Backup] Generating Excel file...');
+    const buffer = await generateBackupExcel(weekLabel);
+    console.log(`[Backup] Excel generated — ${(buffer.length / 1024).toFixed(1)} KB`);
+
+    // Step 2 — Upload to Google Drive
+    console.log('[Backup] Uploading to Google Drive...');
+    const folderId = await getSetting('google_drive_folder_id');
+    const { fileId, webViewLink } = await uploadFileToDrive(
+      fileName,
+      buffer,
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      folderId
+    );
+    console.log(`[Backup] Uploaded — file ID: ${fileId}`);
+
+    // Step 3 — Clear operational data (in correct FK order)
+    console.log('[Backup] Clearing operational data...');
+
+    // Delete in FK-safe order (children before parents)
+    await db.delete(loginAttempts);
+    await db.delete(auditLogs);
+    await db.delete(lotteryWinners);
+    await db.delete(lotteryEntries);
+    await db.delete(lotteryDraws);
+    await db.delete(commissions);
+    await db.delete(timesheets);
+    await db.delete(financeEntries);
+    await db.delete(expenses);
+    await db.delete(whatsappMessages);
+    await db.delete(importPayments);
+    await db.delete(importShipmentItems);
+    await db.delete(importShipments);
+    await db.delete(orderStatusHistory);
+    await db.delete(orderItems);
+    await db.delete(deliveries);
+    const deletedOrders = await db.delete(orders).returning();
+    rowsCleared = deletedOrders.length;
+
+    console.log(`[Backup] Cleared ${rowsCleared} orders and all related data`);
+
+    // Step 4 — Log the backup
+    await db.insert(backupLogs).values({
+      weekLabel,
+      fileName,
+      fileId,
+      webViewLink,
+      rowsCleared,
+      status: 'success',
+      createdAt: now,
+    });
+
+    // Step 5 — Send notifications
+    const teamsWebhook = await getSetting('microsoft_teams_webhook_url');
+    if (teamsWebhook) {
+      await sendTeamsNotification(
+        teamsWebhook,
+        '✅ Weekly Backup Complete',
+        `TG's Restaurant data for week of ${weekLabel} has been backed up to Google Drive and the database has been cleared.\n\n📊 Orders backed up: ${rowsCleared}\n📁 File: ${fileName}\n🔗 [View in Google Drive](${webViewLink})`,
+        '00B050'
+      );
+    }
+
+    console.log('[Backup] Weekly backup complete ✅');
+    return { success: true, fileId, webViewLink, rowsCleared };
+
+  } catch (error: any) {
+    console.error('[Backup] Failed:', error);
+
+    // Log the failure
+    await db.insert(backupLogs).values({
+      weekLabel,
+      fileName,
+      fileId: null,
+      webViewLink: null,
+      rowsCleared: 0,
+      status: 'failed',
+      errorMessage: error.message,
+      createdAt: now,
+    }).catch(() => {}); // Don't throw if log insert fails
+
+    return { success: false, error: error.message, rowsCleared: 0 };
+  }
+}
+```
+
+---
+
+## 4. DATABASE SCHEMA — NEW TABLE
+
+Add to `lib/db/src/schema/` a new file `backup.ts`:
+
+```typescript
+import { pgTable, serial, text, integer, timestamp } from 'drizzle-orm/pg-core';
+
+export const backupLogs = pgTable('backup_logs', {
+  id: serial('id').primaryKey(),
+  weekLabel: text('week_label').notNull(),
+  fileName: text('file_name').notNull(),
+  fileId: text('file_id'),
+  webViewLink: text('web_view_link'),
+  rowsCleared: integer('rows_cleared').default(0),
+  status: text('status').notNull(), // 'success' | 'failed'
+  errorMessage: text('error_message'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+});
+```
+
+Export it from `lib/db/src/schema/index.ts`.
+
+Run schema push after adding this:
+```bash
+DATABASE_URL=$NEON_DATABASE_URL pnpm run db:push
+```
+
+---
+
+## 5. CRON JOB — WEEKLY AUTO-RUN
+
+Add the weekly backup cron to `artifacts/api-server/src/lib/cron-jobs.ts`:
+
+```typescript
+import cron from 'node-cron';
+import { runWeeklyBackup } from './weekly-backup';
+
+// Weekly backup — every Sunday at 20:00 UTC (midnight UAE, UTC+4)
+cron.schedule('0 20 * * 0', async () => {
+  console.log('[Cron] Starting weekly backup...');
+  const result = await runWeeklyBackup();
+  if (result.success) {
+    console.log(`[Cron] Weekly backup success — ${result.rowsCleared} orders cleared`);
+  } else {
+    console.error(`[Cron] Weekly backup failed: ${result.error}`);
+  }
+}, {
+  timezone: 'UTC'
+});
+```
+
+---
+
+## 6. API ROUTES — BACKUP MANAGEMENT
+
+Add a new route file `artifacts/api-server/src/routes/backup.ts`:
+
+```typescript
+import { Router } from 'express';
+import { authenticate, requireRole } from '../middlewares/auth';
+import { runWeeklyBackup } from '../lib/weekly-backup';
+import { db } from '@workspace/db';
+import { backupLogs } from '@workspace/db/schema';
+import { desc } from 'drizzle-orm';
+
+const router = Router();
+router.use(authenticate, requireRole('super_admin'));
+
+// GET /api/backup/logs — last 20 backup history entries
+router.get('/logs', async (req, res) => {
+  const logs = await db.select().from(backupLogs)
+    .orderBy(desc(backupLogs.createdAt))
+    .limit(20);
+  res.json(logs);
+});
+
+// POST /api/backup/run — manually trigger backup now
+router.post('/run', async (req, res) => {
+  // Run in background — don't await (could take 30-60 seconds)
+  res.json({ message: 'Backup started. Check backup logs in a few minutes.' });
+  
+  runWeeklyBackup().then(result => {
+    console.log('[Manual Backup]', result);
+  }).catch(err => {
+    console.error('[Manual Backup] Error:', err);
+  });
+});
+
+// GET /api/backup/test-drive — test Google Drive connection
+router.get('/test-drive', async (req, res) => {
+  try {
+    const { getGoogleDriveClient } = await import('../lib/google-drive');
+    const { drive } = await getGoogleDriveClient();
+    const about = await drive.about.get({ fields: 'user' });
+    res.json({ 
+      success: true, 
+      connectedAs: about.data.user?.emailAddress,
+      message: 'Google Drive connection successful'
+    });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+export default router;
+```
+
+Register in `artifacts/api-server/src/routes/index.ts`:
+```typescript
+import backupRouter from './backup';
+router.use('/backup', backupRouter);
+```
+
+---
+
+## 7. SETTINGS — GOOGLE DRIVE SECTION
+
+### 7.1 New Settings Keys
+
+Add these to the settings defaults/initialization:
+
+```typescript
+// Google Drive Integration
+{ key: 'google_drive_client_email', label: 'Service Account Email', sensitive: false, section: 'google_drive', description: 'The client_email from your Google Service Account JSON key' },
+{ key: 'google_drive_private_key', label: 'Service Account Private Key', sensitive: true, section: 'google_drive', description: 'The private_key from your Google Service Account JSON (paste the full key including -----BEGIN/END PRIVATE KEY-----)' },
+{ key: 'google_drive_folder_id', label: 'Google Drive Folder ID', sensitive: false, section: 'google_drive', description: 'The ID from the Google Drive folder URL where backups will be saved (the part after /folders/ in the URL)' },
+{ key: 'google_drive_enabled', label: 'Enable Auto Weekly Backup', sensitive: false, section: 'google_drive', description: 'Toggle to enable/disable the automatic Sunday midnight backup' },
+{ key: 'backup_notify_whatsapp', label: 'WhatsApp Notification Number', sensitive: false, section: 'google_drive', description: 'Phone number to notify when backup completes (include country code)' },
+```
+
+### 7.2 New "Google Drive & Backup" Tab in Settings UI
+
+Add a new tab in `artifacts/tg-erp/src/pages/settings.tsx` — **"Google Drive & Backup"** tab with a Google Drive icon.
+
+**Section A — Google Drive Connection:**
+```
+┌─────────────────────────────────────────────────────┐
+│ 🔗 Google Drive Connection                          │
+│                                                     │
+│ Service Account Email        [not set] [✏️ Edit]    │
+│ Service Account Private Key  [encrypted] [✏️ Edit]  │
+│ Drive Folder ID              [not set] [✏️ Edit]    │
+│                                                     │
+│ [🔌 Test Connection]  → shows "Connected as: ..."   │
+└─────────────────────────────────────────────────────┘
+```
+
+**Section B — Backup Schedule:**
+```
+┌─────────────────────────────────────────────────────┐
+│ 📅 Automatic Weekly Backup                          │
+│                                                     │
+│ Schedule: Every Sunday at 12:00 AM UAE time         │
+│ Auto-backup enabled  [Toggle ON/OFF]                │
+│ WhatsApp notify number  [+971...] [✏️ Edit]         │
+│                                                     │
+│ [▶️ Run Backup Now]  ← manual trigger button        │
+│ (Takes 30-60 seconds — runs in background)          │
+└─────────────────────────────────────────────────────┘
+```
+
+**Section C — Backup History:**
+```
+┌─────────────────────────────────────────────────────┐
+│ 📋 Backup History (Last 10)                         │
+│                                                     │
+│ Week        │ File              │ Status │ Orders │ Link   │
+│ 2026-07-06  │ TG-Backup-...xlsx │ ✅     │ 142    │ [Open] │
+│ 2026-06-29  │ TG-Backup-...xlsx │ ✅     │ 98     │ [Open] │
+│ 2026-06-22  │ TG-Backup-...xlsx │ ❌     │ —      │ Error  │
+└─────────────────────────────────────────────────────┘
+```
+
+- **[Open]** link → opens the Google Drive file directly in a new tab (uses `webViewLink` from backup_logs)
+- Status badge: green ✅ Success / red ❌ Failed
+- "Run Backup Now" button → calls `POST /api/backup/run` → shows a toast "Backup started — check history in a few minutes" → auto-refreshes history after 60 seconds
+- "Test Connection" button → calls `GET /api/backup/test-drive` → shows "Connected as: service@project.iam.gserviceaccount.com" or error
+
+---
+
+## 8. HOW TO SET UP GOOGLE DRIVE (Instructions for Admin — add to Settings page as a collapsible help section)
+
+Show these instructions as a collapsible "How to set up" section directly in the Settings → Google Drive tab:
+
+```
+📖 Setup Guide (click to expand)
+
+1. Go to console.cloud.google.com
+2. Create a new project (or use existing)
+3. Enable "Google Drive API" in APIs & Services → Library
+4. Go to APIs & Services → Credentials → Create Credentials → Service Account
+5. Name it "tgs-restaurant-backup" → Create
+6. Click the service account → Keys tab → Add Key → JSON → Download
+7. Open the downloaded JSON file:
+   - Copy "client_email" → paste into "Service Account Email" above
+   - Copy "private_key" → paste into "Service Account Private Key" above
+8. Go to Google Drive → create a folder called "TG Restaurant Backups"
+9. Right-click the folder → Share → paste the client_email → give Editor access
+10. Open the folder → copy the ID from the URL (the part after /folders/)
+    Example: drive.google.com/drive/folders/[THIS_PART] → paste into "Folder ID" above
+11. Click "Test Connection" to verify — should show "Connected as: your-service-account@..."
+```
+
+---
+
+## 9. WHAT IS NEVER CLEARED — CONFIRMATION
+
+Add a visible "What gets backed up & cleared" info panel in the Settings → Backup tab:
+
+**Backed up & cleared weekly:**
+- ✅ Orders & order items
+- ✅ Deliveries
+- ✅ Lottery entries, draws & winners
+- ✅ Finance entries & expenses
+- ✅ Staff commissions
+- ✅ Timesheets
+- ✅ WhatsApp message logs
+- ✅ Import shipments & payments
+- ✅ Audit logs & login attempts
+
+**Never touched:**
+- 🔒 Staff accounts (names, phones, passwords, roles)
+- 🔒 Branches
+- 🔒 Menu items & categories
+- 🔒 Inventory items & restock rules
+- 🔒 Suppliers
+- 🔒 System settings
+- 🔒 Customers table (phone numbers kept for lottery history)
+- 🔒 Backup logs themselves
+
+---
+
+## 10. VERIFICATION CHECKLIST
+
+- [ ] `backup_logs` table exists after `db:push`
+- [ ] `googleapis` and `exceljs` installed in api-server package
+- [ ] `GET /api/backup/logs` returns array (empty is fine initially)
+- [ ] `POST /api/backup/run` returns `{ message: "Backup started..." }` immediately
+- [ ] Settings → Google Drive tab renders with all 3 sections (Connection, Schedule, History)
+- [ ] "Test Connection" button calls the API and shows success/error response
+- [ ] "Run Backup Now" button triggers the backup and shows toast
+- [ ] After running backup manually: backup_logs table has a new entry
+- [ ] If Google Drive credentials are configured: Excel file appears in the Drive folder
+- [ ] If Google Drive not configured: backup fails gracefully with clear error message in logs (doesn't crash the server)
+- [ ] Weekly cron job is registered and visible in the Cron Job Monitor
+- [ ] Setup guide is visible as collapsible section in the tab
+- [ ] "What gets cleared" info panel is visible
+
+---
+
+## 11. FINAL INSTRUCTION TO REPLIT AGENT
+
+Build in this order:
+1. Add `backup_logs` schema → run `db:push`
+2. Install `googleapis` package
+3. Build `google-drive.ts` utility
+4. Build `backup-generator.ts` (Excel creator)
+5. Build `weekly-backup.ts` (orchestrator)
+6. Add backup route + register in routes index
+7. Add weekly cron to cron-jobs.ts
+8. Add Google Drive settings keys to settings defaults
+9. Build the Settings → Google Drive & Backup tab in frontend
+10. Push to GitHub
+
+Make sure the backup runs gracefully even when Google Drive is not yet configured — it should log the failure clearly but never crash the server or affect any other feature. The weekly cron must be silent when auto-backup is disabled in settings.
+
+After building, run `pnpm run build:api` and `pnpm run build:web` and confirm both compile clean before pushing to GitHub.

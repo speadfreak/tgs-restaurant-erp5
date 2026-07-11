@@ -8,7 +8,8 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import {
   Settings, MessageSquare, Mail, Trophy, Globe, Shield,
-  Eye, EyeOff, Edit2, Check, X, Loader2, Wifi, TestTube, Building2, RefreshCw
+  Eye, EyeOff, Edit2, Check, X, Loader2, Wifi, TestTube, Building2, RefreshCw,
+  HardDrive, PlayCircle, ChevronDown, ExternalLink,
 } from "lucide-react";
 import { getApiBase } from "@/lib/api-base";
 
@@ -39,9 +40,22 @@ const SECTIONS: { id: string; label: string; icon: React.ElementType }[] = [
   { id: "lottery", label: "Lottery", icon: Trophy },
   { id: "addis", label: "Addis", icon: Globe },
   { id: "microsoft", label: "Microsoft", icon: Building2 },
+  { id: "google_drive", label: "Google Drive & Backup", icon: HardDrive },
   { id: "system", label: "System", icon: Settings },
   { id: "security", label: "Security", icon: Shield },
 ];
+
+type BackupLog = {
+  id: number;
+  weekLabel: string;
+  fileName: string;
+  fileId: string | null;
+  webViewLink: string | null;
+  rowsCleared: number | null;
+  status: string;
+  errorMessage: string | null;
+  createdAt: string;
+};
 
 export default function SettingsPage() {
   const { user } = useAuth();
@@ -65,6 +79,15 @@ export default function SettingsPage() {
   const [editingRate, setEditingRate] = useState(false);
   const [fetchingLiveRate, setFetchingLiveRate] = useState(false);
   const [liveRateMeta, setLiveRateMeta] = useState<{ source: string; fetchedAt: string } | null>(null);
+
+  // Google Drive & Backup section state
+  const [backupLogs, setBackupLogs] = useState<BackupLog[]>([]);
+  const [backupLogsLoading, setBackupLogsLoading] = useState(false);
+  const [drivingTest, setDrivingTest] = useState(false);
+  const [driveTestResult, setDriveTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [runningBackup, setRunningBackup] = useState(false);
+  const [backupRunMessage, setBackupRunMessage] = useState<string | null>(null);
+  const [setupGuideOpen, setSetupGuideOpen] = useState(false);
 
   const fetchSettings = useCallback(async () => {
     setLoading(true);
@@ -113,6 +136,47 @@ export default function SettingsPage() {
   useEffect(() => {
     if (activeSection === "addis") fetchExchangeRate();
   }, [activeSection, fetchExchangeRate]);
+
+  const fetchBackupLogs = useCallback(async () => {
+    setBackupLogsLoading(true);
+    try {
+      const res = await apiFetch("/api/backup/logs");
+      if (res.ok) setBackupLogs(await res.json());
+    } catch { /* ignore */ }
+    setBackupLogsLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (activeSection === "google_drive") fetchBackupLogs();
+  }, [activeSection, fetchBackupLogs]);
+
+  const testDriveConnection = async () => {
+    setDrivingTest(true);
+    setDriveTestResult(null);
+    try {
+      const res = await apiFetch("/api/backup/test-drive");
+      const j = await res.json();
+      setDriveTestResult({ ok: !!j.success, message: j.success ? `Connected as: ${j.connectedAs}` : (j.error ?? "Connection failed") });
+    } catch (err) {
+      setDriveTestResult({ ok: false, message: String(err) });
+    }
+    setDrivingTest(false);
+  };
+
+  const runBackupNow = async () => {
+    setRunningBackup(true);
+    setBackupRunMessage(null);
+    try {
+      const res = await apiFetch("/api/backup/run", "POST");
+      const j = await res.json();
+      setBackupRunMessage(j.message ?? "Backup started");
+      toast({ title: "Backup started", description: "Check backup history in a few minutes" });
+      setTimeout(() => fetchBackupLogs(), 60000);
+    } catch {
+      toast({ title: "Failed to start backup", variant: "destructive" });
+    }
+    setRunningBackup(false);
+  };
 
   const fetchLiveRate = async () => {
     setFetchingLiveRate(true);
@@ -330,6 +394,185 @@ export default function SettingsPage() {
             )}
           </CardContent>
         </Card>
+      )}
+
+      {/* Google Drive & Backup section */}
+      {activeSection === "google_drive" && (
+        <>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm flex items-center gap-2">
+                <Wifi className="h-4 w-4 text-amber-400" /> Google Drive Connection
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-xs text-muted-foreground mb-3">
+                Configure the Service Account credentials below (see setup guide), then test the connection.
+              </p>
+              <div className="flex flex-wrap items-center gap-3">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={drivingTest}
+                  onClick={testDriveConnection}
+                  className="border-amber-500/30 text-amber-400 hover:bg-amber-500/10"
+                >
+                  {drivingTest ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : <TestTube className="h-3.5 w-3.5 mr-1.5" />}
+                  Test Connection
+                </Button>
+                {driveTestResult && (
+                  <span className={`text-sm font-medium ${driveTestResult.ok ? "text-green-400" : "text-red-400"}`}>
+                    {driveTestResult.ok ? "✅" : "❌"} {driveTestResult.message}
+                  </span>
+                )}
+              </div>
+
+              <button
+                onClick={() => setSetupGuideOpen(o => !o)}
+                className="mt-4 flex items-center gap-1.5 text-xs text-amber-400 hover:text-amber-300"
+              >
+                <ChevronDown className={`h-3.5 w-3.5 transition-transform ${setupGuideOpen ? "rotate-180" : ""}`} />
+                📖 Setup Guide {setupGuideOpen ? "(hide)" : "(click to expand)"}
+              </button>
+              {setupGuideOpen && (
+                <ol className="mt-2 space-y-1.5 text-xs text-zinc-400 list-decimal list-inside bg-zinc-900/50 border border-zinc-800 rounded-lg p-4">
+                  <li>Go to <a href="https://console.cloud.google.com" target="_blank" rel="noreferrer" className="text-amber-400 underline">console.cloud.google.com</a></li>
+                  <li>Create a new project (or use an existing one)</li>
+                  <li>Enable "Google Drive API" in APIs & Services → Library</li>
+                  <li>Go to APIs & Services → Credentials → Create Credentials → Service Account</li>
+                  <li>Name it "tgs-restaurant-backup" → Create</li>
+                  <li>Click the service account → Keys tab → Add Key → JSON → Download</li>
+                  <li>Open the downloaded JSON file: copy <code className="text-amber-300">client_email</code> into "Service Account Email" below, and <code className="text-amber-300">private_key</code> into "Service Account Private Key" below</li>
+                  <li>In Google Drive, create a folder called "TG Restaurant Backups"</li>
+                  <li>Right-click the folder → Share → paste the client_email → give Editor access</li>
+                  <li>Open the folder and copy the ID from the URL (the part after <code className="text-amber-300">/folders/</code>) into "Google Drive Folder ID" below</li>
+                  <li>Click "Test Connection" above to verify — it should show "Connected as: your-service-account@..."</li>
+                </ol>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm flex items-center gap-2">
+                <PlayCircle className="h-4 w-4 text-amber-400" /> Automatic Weekly Backup
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-xs text-muted-foreground mb-3">
+                Schedule: every Sunday at 12:00 AM UAE time. Toggle "Enable Auto Weekly Backup" below to turn the schedule on/off.
+              </p>
+              <div className="flex flex-wrap items-center gap-3">
+                <Button
+                  size="sm"
+                  disabled={runningBackup}
+                  onClick={runBackupNow}
+                  className="bg-amber-500 hover:bg-amber-600 text-black font-medium"
+                >
+                  {runningBackup ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : <PlayCircle className="h-3.5 w-3.5 mr-1.5" />}
+                  Run Backup Now
+                </Button>
+                <span className="text-xs text-zinc-500">Takes 30-60 seconds — runs in background</span>
+              </div>
+              {backupRunMessage && <p className="text-xs text-green-400 mt-2">{backupRunMessage}</p>}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <HardDrive className="h-4 w-4 text-amber-400" /> Backup History (Last 20)
+              </CardTitle>
+              <Button size="icon" variant="ghost" className="h-7 w-7 text-zinc-500 hover:text-amber-400" onClick={fetchBackupLogs} title="Refresh">
+                <RefreshCw className="h-3.5 w-3.5" />
+              </Button>
+            </CardHeader>
+            <CardContent>
+              {backupLogsLoading ? (
+                <div className="flex items-center gap-2 text-zinc-500 text-sm py-4"><Loader2 className="h-4 w-4 animate-spin" />Loading...</div>
+              ) : backupLogs.length === 0 ? (
+                <p className="py-6 text-center text-sm text-muted-foreground">No backups have run yet.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-xs text-zinc-500 border-b border-zinc-800">
+                        <th className="py-2 pr-3 font-medium">Week</th>
+                        <th className="py-2 pr-3 font-medium">File</th>
+                        <th className="py-2 pr-3 font-medium">Status</th>
+                        <th className="py-2 pr-3 font-medium">Orders</th>
+                        <th className="py-2 pr-3 font-medium">Link</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-800/60">
+                      {backupLogs.map(log => (
+                        <tr key={log.id}>
+                          <td className="py-2 pr-3 font-mono text-xs text-zinc-300">{log.weekLabel}</td>
+                          <td className="py-2 pr-3 text-xs text-zinc-400 max-w-[220px] truncate" title={log.fileName}>{log.fileName}</td>
+                          <td className="py-2 pr-3">
+                            {log.status === "success" ? (
+                              <Badge className="bg-green-600/15 text-green-400 border border-green-600/30">✅ Success</Badge>
+                            ) : (
+                              <Badge className="bg-red-600/15 text-red-400 border border-red-600/30" title={log.errorMessage ?? undefined}>❌ Failed</Badge>
+                            )}
+                          </td>
+                          <td className="py-2 pr-3 text-xs text-zinc-300">{log.status === "success" ? (log.rowsCleared ?? 0) : "—"}</td>
+                          <td className="py-2 pr-3">
+                            {log.webViewLink ? (
+                              <a href={log.webViewLink} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-amber-400 hover:text-amber-300">
+                                Open <ExternalLink className="h-3 w-3" />
+                              </a>
+                            ) : (
+                              <span className="text-xs text-zinc-600">Error</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm flex items-center gap-2">
+                <Shield className="h-4 w-4 text-amber-400" /> What Gets Backed Up & Cleared
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="grid sm:grid-cols-2 gap-4 text-xs">
+              <div>
+                <p className="font-medium text-zinc-300 mb-1.5">Backed up & cleared weekly:</p>
+                <ul className="space-y-1 text-zinc-400">
+                  <li>✅ Orders & order items</li>
+                  <li>✅ Deliveries</li>
+                  <li>✅ Lottery entries, draws & winners</li>
+                  <li>✅ Finance entries & expenses</li>
+                  <li>✅ Staff commissions</li>
+                  <li>✅ Timesheets</li>
+                  <li>✅ WhatsApp message logs</li>
+                  <li>✅ Import shipments & payments</li>
+                  <li>✅ Login attempts</li>
+                  <li>✅ Completed staff activities</li>
+                </ul>
+              </div>
+              <div>
+                <p className="font-medium text-zinc-300 mb-1.5">Never touched:</p>
+                <ul className="space-y-1 text-zinc-400">
+                  <li>🔒 Staff accounts (names, phones, passwords, roles)</li>
+                  <li>🔒 Branches</li>
+                  <li>🔒 Menu items & categories</li>
+                  <li>🔒 Inventory items & restock rules</li>
+                  <li>🔒 Suppliers</li>
+                  <li>🔒 System settings</li>
+                  <li>🔒 Customers (kept for lottery history)</li>
+                  <li>🔒 Backup logs themselves</li>
+                </ul>
+              </div>
+            </CardContent>
+          </Card>
+        </>
       )}
 
       {/* Settings list */}

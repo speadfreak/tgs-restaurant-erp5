@@ -21,6 +21,7 @@ import cronStatusRouter from "./cron-status";
 import auditRouter from "./audit";
 import auditXlsxRouter from "./audit-xlsx";
 import settingsRouter from "./settings";
+import backupRouter from "./backup";
 
 const router: IRouter = Router();
 
@@ -60,5 +61,6 @@ router.use(cronStatusRouter);
 router.use(auditRouter);
 router.use(auditXlsxRouter);
 router.use(settingsRouter);
+router.use(backupRouter);
 
 export default router;

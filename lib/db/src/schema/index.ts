@@ -14,3 +14,4 @@ export * from "./whatsapp";
 export * from "./addis";
 export * from "./settings";
 export * from "./security";
+export * from "./backup";

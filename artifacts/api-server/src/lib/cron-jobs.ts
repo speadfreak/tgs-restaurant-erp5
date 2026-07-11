@@ -6,6 +6,8 @@ import {
 } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
 import { sendWhatsAppMessage } from "./twilio";
+import { getSetting } from "./settings";
+import { runWeeklyBackup } from "./weekly-backup";
 
 async function logJob(jobName: string, success: boolean, message: string) {
   try {
@@ -148,6 +150,26 @@ export async function checkOverdueShipments() {
   }
 }
 
+// ── 5. WEEKLY GOOGLE DRIVE BACKUP + DB CLEAR ────────────────────────────────
+// Every Sunday at 20:00 UTC = midnight UAE (UTC+4). Silent no-op when the
+// admin has not enabled auto-backup in Settings → Google Drive & Backup.
+export async function runScheduledWeeklyBackup() {
+  const enabled = await getSetting("google_drive_enabled");
+  if (enabled !== "true") {
+    await logJob("weekly_backup", true, "Auto-backup disabled in settings — skipped");
+    return;
+  }
+  console.log("[Cron] Starting weekly backup...");
+  const result = await runWeeklyBackup();
+  if (result.success) {
+    await logJob("weekly_backup", true, `Backed up & cleared ${result.rowsCleared} orders — ${result.webViewLink}`);
+    console.log(`[Cron] Weekly backup success — ${result.rowsCleared} orders cleared`);
+  } else {
+    await logJob("weekly_backup", false, result.error ?? "Unknown error");
+    console.error(`[Cron] Weekly backup failed: ${result.error}`);
+  }
+}
+
 // ── START ALL CRON JOBS ─────────────────────────────────────────────────────
 export function startCronJobs() {
   // Daily draw at 18:00 UTC (22:00 UAE)
@@ -165,5 +187,8 @@ export function startCronJobs() {
   // Import overdue check at 05:00 UTC (09:00 UAE)
   cron.schedule("0 5 * * *", () => { checkOverdueShipments().catch(console.error); });
 
-  console.log("[Cron] Phase 4 cron jobs scheduled (draw@18UTC, retry@*/15, reset@20UTC, overdue@05UTC)");
+  // Weekly Google Drive backup + DB clear — Sunday 20:00 UTC (midnight UAE)
+  cron.schedule("0 20 * * 0", () => { runScheduledWeeklyBackup().catch(console.error); }, { timezone: "UTC" });
+
+  console.log("[Cron] Phase 4+8 cron jobs scheduled (draw@18UTC, retry@*/15, reset@20UTC, overdue@05UTC, backup@Sun20UTC)");
 }
