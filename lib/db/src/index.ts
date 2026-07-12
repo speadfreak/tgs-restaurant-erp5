@@ -10,12 +10,18 @@ if (!process.env.DATABASE_URL) {
   );
 }
 
-// Enable SSL in production so the connection to Neon (and any other hosted
-// Postgres) is encrypted. Neon uses certificates from a trusted CA so
-// full verification (rejectUnauthorized: true, which is the default for
-// ssl: true) is safe here.  In development, SSL is left off for local
-// Postgres compatibility.
-const ssl = process.env["NODE_ENV"] === "production" ? true : false;
+// Enable SSL in production so the connection to hosted Postgres (Neon,
+// Supabase, etc.) is encrypted. Full chain verification is left off
+// (rejectUnauthorized: false) because managed providers like Supabase's
+// connection pooler present certificate chains Node's default trusted-CA
+// store does not fully validate (SELF_SIGNED_CERT_IN_CHAIN), which would
+// otherwise make every query fail. The connection is still encrypted via
+// TLS — only certificate chain verification is relaxed. In development,
+// SSL is left off entirely for local Postgres compatibility.
+const ssl =
+  process.env["NODE_ENV"] === "production"
+    ? { rejectUnauthorized: false }
+    : false;
 
 export const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl });
 export const db = drizzle(pool, { schema });
