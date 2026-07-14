@@ -46,6 +46,9 @@ export const lotteryWinnersTable = pgTable("lottery_winners", {
   notificationStatus: text("notification_status").notNull().default("pending"),
   notificationSentAt: timestamp("notification_sent_at", { withTimezone: true }),
   twilioMessageSid: text("twilio_message_sid"),
+  claimed: boolean("claimed").notNull().default(false),
+  claimedAt: timestamp("claimed_at", { withTimezone: true }),
+  claimedByUserId: integer("claimed_by_user_id").references(() => usersTable.id),
 });
 
 export const lotterySettingsTable = pgTable("lottery_settings", {

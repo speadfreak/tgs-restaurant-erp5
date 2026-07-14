@@ -253,6 +253,49 @@ router.post("/lottery/draws/:id/run", async (req, res): Promise<void> => {
   res.json({ drawId: draw.id, seed, totalEntries: entries.length, winners });
 });
 
+// GET /lottery/draws/:id/winners — full winner details for a specific draw
+router.get("/lottery/draws/:id/winners", async (req, res): Promise<void> => {
+  const drawId = parseInt(req.params.id, 10);
+  if (isNaN(drawId)) { res.status(400).json({ error: "Invalid id" }); return; }
+
+  const rows = await db.select({
+    winnerId: lotteryWinnersTable.id,
+    entryId: lotteryWinnersTable.entryId,
+    prizeTier: lotteryWinnersTable.prizeTier,
+    prizeDescription: lotteryWinnersTable.prizeDescription,
+    notificationStatus: lotteryWinnersTable.notificationStatus,
+    notificationSentAt: lotteryWinnersTable.notificationSentAt,
+    claimed: lotteryWinnersTable.claimed,
+    claimedAt: lotteryWinnersTable.claimedAt,
+    customerPhone: lotteryEntriesTable.customerPhone,
+    customerName: lotteryEntriesTable.customerName,
+    luckyNumber: lotteryEntriesTable.luckyNumber,
+    orderId: lotteryEntriesTable.orderId,
+  }).from(lotteryWinnersTable)
+    .innerJoin(lotteryEntriesTable, eq(lotteryWinnersTable.entryId, lotteryEntriesTable.id))
+    .where(eq(lotteryWinnersTable.drawId, drawId))
+    .orderBy(lotteryWinnersTable.id);
+
+  res.json(rows);
+});
+
+// PATCH /lottery/winners/:id/claimed — mark a prize as claimed/unclaimed
+router.patch("/lottery/winners/:id/claimed", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  const { userId } = req.body;
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+  const claimed = req.body.claimed === true;
+
+  const [winner] = await db.update(lotteryWinnersTable).set({
+    claimed,
+    claimedAt: claimed ? new Date() : null,
+    claimedByUserId: claimed ? (userId ?? null) : null,
+  }).where(eq(lotteryWinnersTable.id, id)).returning();
+
+  if (!winner) { res.status(404).json({ error: "Winner not found" }); return; }
+  res.json({ id: winner.id, claimed: winner.claimed, claimedAt: winner.claimedAt });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SETTINGS
 // ─────────────────────────────────────────────────────────────────────────────

@@ -45,12 +45,41 @@ interface LotteryWinner {
   prizeDescription: string;
   notificationStatus: string;
 }
+interface DrawWinnerDetail {
+  winnerId: number;
+  entryId: number;
+  prizeTier: string;
+  prizeDescription: string;
+  notificationStatus: string;
+  notificationSentAt: string | null;
+  claimed: boolean;
+  claimedAt: string | null;
+  customerPhone: string;
+  customerName: string | null;
+  luckyNumber: number;
+  orderId: number;
+}
 interface LotterySettings {
   drawTime: string;
   autoRunEnabled: boolean;
   prizeConfig: string;
 }
+interface PrizeTier { tier: string; count: number; prize: string }
 interface Branch { id: number; name: string }
+
+function parsePrizeTiers(json: string): PrizeTier[] {
+  try {
+    const parsed = JSON.parse(json);
+    if (Array.isArray(parsed)) {
+      return parsed.map(t => ({
+        tier: String(t.tier ?? ""),
+        count: Number(t.count) > 0 ? Number(t.count) : 1,
+        prize: String(t.prize ?? ""),
+      }));
+    }
+  } catch { /* fall through to default */ }
+  return [{ tier: "First Prize", count: 1, prize: "Free Meal" }];
+}
 
 const BASE = getApiBase();
 function getToken() { return localStorage.getItem("tg_erp_token"); }
@@ -123,7 +152,67 @@ export default function LotteryPage() {
 
   // Settings form
   const [settingsForm, setSettingsForm] = useState({ drawTime: "22:00", prizeConfig: "" });
+  const [prizeTiers, setPrizeTiers] = useState<PrizeTier[]>(parsePrizeTiers(""));
   const [savingSettings, setSavingSettings] = useState(false);
+
+  // Past-draw winner history
+  const [expandedDrawId, setExpandedDrawId] = useState<number | null>(null);
+  const [drawWinners, setDrawWinners] = useState<Record<number, DrawWinnerDetail[]>>({});
+  const [loadingWinners, setLoadingWinners] = useState(false);
+
+  const totalConfiguredWinners = prizeTiers.reduce((sum, t) => sum + (t.count || 0), 0);
+
+  const updateTier = (index: number, patch: Partial<PrizeTier>) => {
+    setPrizeTiers(prev => {
+      const next = prev.map((t, i) => i === index ? { ...t, ...patch } : t);
+      setSettingsForm(f => ({ ...f, prizeConfig: JSON.stringify(next) }));
+      return next;
+    });
+  };
+  const addTier = () => {
+    setPrizeTiers(prev => {
+      const next = [...prev, { tier: `Prize ${prev.length + 1}`, count: 1, prize: "" }];
+      setSettingsForm(f => ({ ...f, prizeConfig: JSON.stringify(next) }));
+      return next;
+    });
+  };
+  const removeTier = (index: number) => {
+    setPrizeTiers(prev => {
+      const next = prev.filter((_, i) => i !== index);
+      setSettingsForm(f => ({ ...f, prizeConfig: JSON.stringify(next) }));
+      return next;
+    });
+  };
+
+  const toggleDrawWinners = async (drawId: number) => {
+    if (expandedDrawId === drawId) { setExpandedDrawId(null); return; }
+    setExpandedDrawId(drawId);
+    if (!drawWinners[drawId]) {
+      setLoadingWinners(true);
+      try {
+        const rows = await apiFetch(`/api/lottery/draws/${drawId}/winners`);
+        setDrawWinners(prev => ({ ...prev, [drawId]: Array.isArray(rows) ? rows : [] }));
+      } catch {
+        toast({ title: "Could not load winners", variant: "destructive" });
+      }
+      setLoadingWinners(false);
+    }
+  };
+
+  const toggleClaimed = async (winner: DrawWinnerDetail, drawId: number) => {
+    try {
+      const updated = await apiFetch(`/api/lottery/winners/${winner.winnerId}/claimed`, "PATCH", {
+        claimed: !winner.claimed,
+        userId: user?.id,
+      });
+      setDrawWinners(prev => ({
+        ...prev,
+        [drawId]: (prev[drawId] ?? []).map(w => w.winnerId === winner.winnerId ? { ...w, claimed: updated.claimed, claimedAt: updated.claimedAt } : w),
+      }));
+    } catch {
+      toast({ title: "Update failed", variant: "destructive" });
+    }
+  };
 
   const today = new Date().toISOString().split("T")[0];
   const todayDraw = draws.find(d => d.drawDate === today);
@@ -147,6 +236,7 @@ export default function LotteryPage() {
       if (s) {
         setSettings(s);
         setSettingsForm({ drawTime: s.drawTime ?? "22:00", prizeConfig: s.prizeConfig ?? "" });
+        setPrizeTiers(parsePrizeTiers(s.prizeConfig ?? ""));
       }
     } catch { /* ignore */ }
     setLoading(false);
@@ -517,10 +607,17 @@ export default function LotteryPage() {
 
                   {todayDraw.status !== "completed" && sentEntries.length > 0 && (
                     <>
+                      <div className="rounded-xl border p-3 flex items-center justify-between text-sm" style={{ borderColor: "hsl(0 0% 14%)", background: "hsl(0 0% 6%)" }}>
+                        <span className="text-zinc-400">Configured to select</span>
+                        <span className="font-bold text-amber-400">
+                          {Math.min(totalConfiguredWinners, sentEntries.length)} of {totalConfiguredWinners} winner{totalConfiguredWinners !== 1 ? "s" : ""}
+                          {totalConfiguredWinners > sentEntries.length && <span className="text-zinc-600 font-normal"> (only {sentEntries.length} eligible)</span>}
+                        </span>
+                      </div>
                       {showConfirm ? (
                         <div className="rounded-xl border border-amber-500/30 bg-amber-950/10 p-4">
                           <p className="text-sm text-amber-300 font-medium mb-3">
-                            You are about to draw winners from <strong>{sentEntries.length} entries</strong>. This cannot be undone.
+                            You are about to draw <strong>{Math.min(totalConfiguredWinners, sentEntries.length)} winner{Math.min(totalConfiguredWinners, sentEntries.length) !== 1 ? "s" : ""}</strong> from <strong>{sentEntries.length} entries</strong>. This cannot be undone.
                           </p>
                           <div className="flex gap-3">
                             <button onClick={() => setShowConfirm(false)} className="flex-1 h-10 text-sm border border-zinc-700 text-zinc-400 rounded-lg hover:border-zinc-600 transition-colors">Cancel</button>
@@ -564,15 +661,58 @@ export default function LotteryPage() {
               <div>
                 <h3 className="cinema-title-sm text-zinc-400 text-sm mb-3">Past Draws</h3>
                 <div className="space-y-2">
-                  {draws.filter(d => d.status === "completed").slice(0, 7).map(draw => (
-                    <div key={draw.id} className="flex items-center justify-between px-4 py-3 rounded-xl border" style={{ background: "hsl(0 0% 5%)", borderColor: "hsl(0 0% 10%)" }}>
-                      <div>
-                        <span className="code-text text-zinc-300 text-sm">{draw.drawDate}</span>
-                        <span className="text-xs text-zinc-600 ml-3">{draw.totalEntries} entries</span>
+                  {draws.filter(d => d.status === "completed").slice(0, 7).map(draw => {
+                    const isOpen = expandedDrawId === draw.id;
+                    const winnersList = drawWinners[draw.id] ?? [];
+                    return (
+                      <div key={draw.id} className="rounded-xl border overflow-hidden" style={{ background: "hsl(0 0% 5%)", borderColor: "hsl(0 0% 10%)" }}>
+                        <button
+                          onClick={() => toggleDrawWinners(draw.id)}
+                          className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/[0.02] transition-colors"
+                        >
+                          <div>
+                            <span className="code-text text-zinc-300 text-sm">{draw.drawDate}</span>
+                            <span className="text-xs text-zinc-600 ml-3">{draw.totalEntries} entries</span>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <span className="live-badge"><CheckCircle className="h-3 w-3" />Completed</span>
+                            {isOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+                          </div>
+                        </button>
+                        {isOpen && (
+                          <div className="border-t px-4 py-3 space-y-2" style={{ borderColor: "hsl(0 0% 10%)" }}>
+                            {loadingWinners && winnersList.length === 0 ? (
+                              <div className="text-center py-4"><Loader2 className="h-4 w-4 animate-spin mx-auto text-zinc-600" /></div>
+                            ) : winnersList.length === 0 ? (
+                              <p className="text-xs text-zinc-600 text-center py-2">No winners recorded for this draw</p>
+                            ) : (
+                              winnersList.map(w => (
+                                <div key={w.winnerId} className="flex items-center justify-between gap-3 rounded-lg px-3 py-2" style={{ background: "hsl(0 0% 7%)" }}>
+                                  <div className="min-w-0">
+                                    <div className="flex items-center gap-2">
+                                      <span className="code-text font-black text-amber-400">#{w.luckyNumber}</span>
+                                      <span className="text-xs font-bold text-zinc-400 uppercase tracking-wide">{w.prizeTier}</span>
+                                    </div>
+                                    <div className="text-xs text-zinc-500 truncate">{w.customerName ?? "—"} · {w.customerPhone} · {w.prizeDescription}</div>
+                                  </div>
+                                  <button
+                                    onClick={() => toggleClaimed(w, draw.id)}
+                                    className={`flex-shrink-0 inline-flex items-center gap-1.5 text-xs px-3 py-1 rounded-full border font-bold transition-all ${
+                                      w.claimed
+                                        ? "border-emerald-700 bg-emerald-950/40 text-emerald-400"
+                                        : "border-zinc-700 text-zinc-500 hover:border-amber-600 hover:text-amber-400"
+                                    }`}
+                                  >
+                                    {w.claimed ? <><CheckCircle className="h-3 w-3" />Claimed</> : "Mark Claimed"}
+                                  </button>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        )}
                       </div>
-                      <span className="live-badge"><CheckCircle className="h-3 w-3" />Completed</span>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -595,15 +735,67 @@ export default function LotteryPage() {
                   className="border-zinc-700/60" style={{ background: "hsl(0 0% 7%)" }}
                 />
               </div>
-              <div className="space-y-1.5">
-                <Label className="text-zinc-400 text-xs uppercase tracking-wider">Prize Config (JSON)</Label>
-                <textarea
-                  value={settingsForm.prizeConfig}
-                  onChange={e => setSettingsForm(f => ({ ...f, prizeConfig: e.target.value }))}
-                  placeholder='[{"tier":"First Prize","count":1,"prize":"Free Meal"}]'
-                  className="w-full h-28 px-3 py-2 rounded-lg border text-sm font-mono resize-none focus:outline-none"
-                  style={{ background: "hsl(0 0% 7%)", borderColor: "hsl(0 0% 18%)", color: "hsl(42 25% 88%)" }}
-                />
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <Label className="text-zinc-400 text-xs uppercase tracking-wider">Prize Tiers &amp; Winner Count</Label>
+                  <span className="text-xs font-bold text-amber-400">{totalConfiguredWinners} winner{totalConfiguredWinners !== 1 ? "s" : ""} total</span>
+                </div>
+                <div className="space-y-2">
+                  {prizeTiers.map((tier, i) => (
+                    <div key={i} className="rounded-xl border p-3 space-y-2" style={{ borderColor: "hsl(0 0% 16%)", background: "hsl(0 0% 6%)" }}>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          value={tier.tier}
+                          onChange={e => updateTier(i, { tier: e.target.value })}
+                          placeholder="Tier name (e.g. First Prize)"
+                          className="border-zinc-700/60 text-sm flex-1" style={{ background: "hsl(0 0% 9%)" }}
+                        />
+                        <button
+                          onClick={() => removeTier(i)}
+                          disabled={prizeTiers.length <= 1}
+                          title="Remove tier"
+                          className="h-9 w-9 flex-shrink-0 flex items-center justify-center rounded-lg border border-zinc-700 text-zinc-500 hover:border-red-700 hover:text-red-400 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                      <Input
+                        value={tier.prize}
+                        onChange={e => updateTier(i, { prize: e.target.value })}
+                        placeholder="Prize description (e.g. Free Meal)"
+                        className="border-zinc-700/60 text-sm" style={{ background: "hsl(0 0% 9%)" }}
+                      />
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-zinc-500 uppercase tracking-wider">Number of winners</span>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => updateTier(i, { count: Math.max(1, tier.count - 1) })}
+                            className="h-7 w-7 flex items-center justify-center rounded-lg border border-zinc-700 text-zinc-300 hover:border-amber-600 hover:text-amber-400 transition-colors font-bold"
+                          >−</button>
+                          <input
+                            type="number"
+                            min={1}
+                            value={tier.count}
+                            onChange={e => updateTier(i, { count: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+                            className="w-14 text-center text-sm font-bold rounded-lg border py-1"
+                            style={{ background: "hsl(0 0% 9%)", borderColor: "hsl(0 0% 18%)", color: "hsl(42 25% 88%)" }}
+                          />
+                          <button
+                            onClick={() => updateTier(i, { count: tier.count + 1 })}
+                            className="h-7 w-7 flex items-center justify-center rounded-lg border border-zinc-700 text-zinc-300 hover:border-amber-600 hover:text-amber-400 transition-colors font-bold"
+                          >+</button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <button
+                  onClick={addTier}
+                  className="w-full h-9 rounded-lg border border-dashed text-xs font-semibold text-zinc-400 hover:text-amber-400 hover:border-amber-600 transition-colors"
+                  style={{ borderColor: "hsl(0 0% 20%)" }}
+                >
+                  + Add Prize Tier
+                </button>
               </div>
               <button
                 onClick={saveSettings}
