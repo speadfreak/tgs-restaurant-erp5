@@ -9,6 +9,14 @@ import { sendWhatsAppMessage } from "./twilio";
 import { getSetting } from "./settings";
 import { runWeeklyBackup } from "./weekly-backup";
 
+const DEFAULT_LUCKY_NUMBER_TEMPLATE = "🎉 ስለደንበኝነትዎ እናመሰግናለን! | Thank You for Choosing Us!\n\n🍽️ ትዕዛዝዎ በተሳካ ሁኔታ ተቀብሏል። | Your order has been successfully accepted.\n\n🎟️ የዕጣ ቁጥርዎ | Your Lucky Number: {{lucky_number}}\n\n📌 እባክዎ ቁጥሩን ይያዙት። | Please keep this number for our upcoming prize draw.\n\n🙏 ቲጂ ምግብ ቤት | TG Restaurant";
+
+function renderLuckyNumberMessage(template: string, luckyNumber: number, drawTime: string): string {
+  return template
+    .replace(/\{\{lucky_number\}\}/g, String(luckyNumber))
+    .replace(/\{\{draw_time\}\}/g, drawTime);
+}
+
 async function logJob(jobName: string, success: boolean, message: string) {
   try {
     await db.insert(cronJobLogsTable).values({
@@ -98,7 +106,7 @@ export async function retryLuckyNumbers() {
     for (const entry of toRetry) {
       const [settings] = await db.select().from(lotterySettingsTable).where(eq(lotterySettingsTable.branchId, entry.branchId));
       const drawTime = settings?.drawTime ?? "22:00";
-      const msg = `TG's Restaurant ✨\nYour order is confirmed!\nYour lucky number: #${entry.luckyNumber}\nDraw at ${drawTime}. Good luck!`;
+      const msg = renderLuckyNumberMessage(settings?.luckyNumberTemplate ?? DEFAULT_LUCKY_NUMBER_TEMPLATE, entry.luckyNumber, drawTime);
       const result = await sendWhatsAppMessage(entry.customerPhone, msg, entry.orderId, entry.branchId);
       if (result.ok) {
         await db.update(lotteryEntriesTable).set({

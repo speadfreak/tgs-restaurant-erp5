@@ -15,6 +15,14 @@ import { authenticate, requireRole, ADMIN_ROLES } from "../middlewares/auth";
 const router: Router = Router();
 router.use("/lottery", authenticate, requireRole(...ADMIN_ROLES));
 
+const DEFAULT_LUCKY_NUMBER_TEMPLATE = "🎉 ስለደንበኝነትዎ እናመሰግናለን! | Thank You for Choosing Us!\n\n🍽️ ትዕዛዝዎ በተሳካ ሁኔታ ተቀብሏል። | Your order has been successfully accepted.\n\n🎟️ የዕጣ ቁጥርዎ | Your Lucky Number: {{lucky_number}}\n\n📌 እባክዎ ቁጥሩን ይያዙት። | Please keep this number for our upcoming prize draw.\n\n🙏 ቲጂ ምግብ ቤት | TG Restaurant";
+
+function renderLuckyNumberMessage(template: string, luckyNumber: number, drawTime: string): string {
+  return template
+    .replace(/\{\{lucky_number\}\}/g, String(luckyNumber))
+    .replace(/\{\{draw_time\}\}/g, drawTime);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ENTRIES
 // ─────────────────────────────────────────────────────────────────────────────
@@ -79,7 +87,7 @@ router.post("/lottery/entries/retry/:id", async (req, res): Promise<void> => {
 
   const [settings] = await db.select().from(lotterySettingsTable).where(eq(lotterySettingsTable.branchId, entry.branchId));
   const drawTime = settings?.drawTime ?? "22:00";
-  const msg = `ቲጂ ምግብ ቤት ✨\nየዕድል ቁጥርዎ: #${entry.luckyNumber}\n\nTG's Restaurant ✨\nYour lucky number: #${entry.luckyNumber}\n🎯 Today's draw is at ${drawTime}. Good luck!`;
+  const msg = renderLuckyNumberMessage(settings?.luckyNumberTemplate ?? DEFAULT_LUCKY_NUMBER_TEMPLATE, entry.luckyNumber, drawTime);
 
   const result = await sendWhatsAppMessage(entry.customerPhone, msg, entry.orderId, entry.branchId);
   await db.update(lotteryEntriesTable).set({
@@ -311,7 +319,7 @@ router.get("/lottery/settings/:branchId", async (req, res): Promise<void> => {
       drawTime: "22:00",
       autoRunEnabled: false,
       prizeConfig: '[{"tier":"First Prize","count":1,"prize":"Free Meal"},{"tier":"Second Prize","count":3,"prize":"50% Discount"}]',
-      luckyNumberTemplate: "TG Restaurant ✨\nYour order is confirmed!\nYour lucky number: #{{lucky_number}}\nDraw at {{draw_time}}. Good luck!",
+      luckyNumberTemplate: DEFAULT_LUCKY_NUMBER_TEMPLATE,
       winnerTemplate: "🎉 Congratulations!\nYour lucky number #{{lucky_number}} won!\nPrize: {{prize_description}}",
     });
     return;
@@ -341,7 +349,7 @@ router.put("/lottery/settings/:branchId", async (req, res): Promise<void> => {
       drawTime: drawTime ?? "22:00",
       autoRunEnabled: autoRunEnabled ?? false,
       prizeConfig: prizeConfig ?? '[{"tier":"First Prize","count":1,"prize":"Free Meal"},{"tier":"Second Prize","count":3,"prize":"50% Discount"}]',
-      luckyNumberTemplate: luckyNumberTemplate ?? "TG Restaurant ✨\nYour order is confirmed!\nYour lucky number: #{{lucky_number}}\nDraw at {{draw_time}}. Good luck!",
+      luckyNumberTemplate: luckyNumberTemplate ?? DEFAULT_LUCKY_NUMBER_TEMPLATE,
       winnerTemplate: winnerTemplate ?? "🎉 Congratulations!\nYour lucky number #{{lucky_number}} won!\nPrize: {{prize_description}}",
     }).returning();
     res.json(created);
