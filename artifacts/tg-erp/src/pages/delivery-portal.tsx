@@ -411,16 +411,14 @@ export default function DeliveryPortal() {
                       <p className="text-zinc-500 text-[10px] uppercase tracking-wider mb-1.5 font-bold">Message Preview</p>
                       <p>
                         🎉 ስለደንበኝነትዎ እናመሰግናለን! | Thank You for Choosing Us!<br /><br />
-                        🍽️ ትዕዛዝዎ በተሳካ ሁኔታ ተቀብሏል። | Your order has been successfully accepted.<br /><br />
                         🎟️ የዕጣ ቁጥርዎ | Your Lucky Number: <span className="text-amber-400 font-black text-sm">{lastLucky.luckyNumber}</span><br /><br />
-                        📌 እባክዎ ቁጥሩን ይያዙት። | Please keep this number for our upcoming prize draw.<br /><br />
-                        🙏 ቲጂ ምግብ ቤት | TG Restaurant
+                        📌 እባክዎ ቁጥሩን ይያዙት። | Please keep this number for our upcoming prize draw.
                       </p>
                     </div>
 
                     <button
                       onClick={() => {
-                        const msg = `🎉 ስለደንበኝነትዎ እናመሰግናለን! | Thank You for Choosing Us!\n\n🍽️ ትዕዛዝዎ በተሳካ ሁኔታ ተቀብሏል። | Your order has been successfully accepted.\n\n🎟️ የዕጣ ቁጥርዎ | Your Lucky Number: ${lastLucky.luckyNumber}\n\n📌 እባክዎ ቁጥሩን ይያዙት። | Please keep this number for our upcoming prize draw.\n\n🙏 ቲጂ ምግብ ቤት | TG Restaurant`;
+                        const msg = `🎉 ስለደንበኝነትዎ እናመሰግናለን! | Thank You for Choosing Us!\n\n🎟️ የዕጣ ቁጥርዎ | Your Lucky Number: ${lastLucky.luckyNumber}\n\n📌 እባክዎ ቁጥሩን ይያዙት። | Please keep this number for our upcoming prize draw.`;
                         navigator.clipboard.writeText(msg).then(() =>
                           toast({ title: "Copied!", description: "Paste it into WhatsApp for the customer" })
                         );
@@ -665,7 +663,7 @@ export default function DeliveryPortal() {
                   const hasLucky = order.luckyNumber !== null && order.luckyNumber !== undefined;
                   const buildLuckyMsg = () => {
                     const num = order.luckyNumber;
-                    return `🎉 ስለደንበኝነትዎ እናመሰግናለን! | Thank You for Choosing Us!\n\n🍽️ ትዕዛዝዎ በተሳካ ሁኔታ ተቀብሏል። | Your order has been successfully accepted.\n\n🎟️ የዕጣ ቁጥርዎ | Your Lucky Number: ${num}\n\n📌 እባክዎ ቁጥሩን ይያዙት። | Please keep this number for our upcoming prize draw.\n\n🙏 ቲጂ ምግብ ቤት | TG Restaurant`;
+                    return `🎉 ስለደንበኝነትዎ እናመሰግናለን! | Thank You for Choosing Us!\n\n🎟️ የዕጣ ቁጥርዎ | Your Lucky Number: ${num}\n\n📌 እባክዎ ቁጥሩን ይያዙት። | Please keep this number for our upcoming prize draw.`;
                   };
                   const copyLucky = async () => {
                     try {

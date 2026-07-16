@@ -57,7 +57,7 @@ export const lotterySettingsTable = pgTable("lottery_settings", {
   drawTime: text("draw_time").notNull().default("22:00"),
   autoRunEnabled: boolean("auto_run_enabled").notNull().default(false),
   prizeConfig: text("prize_config").notNull().default('[{"tier":"First Prize","count":1,"prize":"Free Meal"},{"tier":"Second Prize","count":3,"prize":"50% Discount"}]'),
-  luckyNumberTemplate: text("lucky_number_template").notNull().default("🎉 ስለደንበኝነትዎ እናመሰግናለን! | Thank You for Choosing Us!\n\n🍽️ ትዕዛዝዎ በተሳካ ሁኔታ ተቀብሏል። | Your order has been successfully accepted.\n\n🎟️ የዕጣ ቁጥርዎ | Your Lucky Number: {{lucky_number}}\n\n📌 እባክዎ ቁጥሩን ይያዙት። | Please keep this number for our upcoming prize draw.\n\n🙏 ቲጂ ምግብ ቤት | TG Restaurant"),
+  luckyNumberTemplate: text("lucky_number_template").notNull().default("🎉 ስለደንበኝነትዎ እናመሰግናለን! | Thank You for Choosing Us!\n\n🎟️ የዕጣ ቁጥርዎ | Your Lucky Number: {{lucky_number}}\n\n📌 እባክዎ ቁጥሩን ይያዙት። | Please keep this number for our upcoming prize draw."),
   winnerTemplate: text("winner_template").notNull().default("🎉 Congratulations!\nYour lucky number #{{lucky_number}} won!\nPrize: {{prize_description}}"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
