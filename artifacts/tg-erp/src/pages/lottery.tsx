@@ -5,7 +5,7 @@ import { useSocket } from "@/hooks/use-socket";
 import {
   Trophy, Star, Clock, Sparkles, Loader2, RefreshCw,
   AlertCircle, CheckCircle, Send, ChevronDown, ChevronUp,
-  Settings, Gift
+  Settings, Gift, RotateCcw, ShieldAlert
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -143,6 +143,8 @@ export default function LotteryPage() {
   // Draw reveal state
   const [showConfirm, setShowConfirm] = useState(false);
   const [runningDraw, setRunningDraw] = useState(false);
+  const [showVoidConfirm, setShowVoidConfirm] = useState(false);
+  const [voidingDraw, setVoidingDraw] = useState(false);
   const [drawPhase, setDrawPhase] = useState<"idle" | "countdown" | "shuffling" | "revealing" | "complete">("idle");
   const [countdown, setCountdown] = useState(3);
   const [winners, setWinners] = useState<(LotteryWinner & LotteryEntry)[]>([]);
@@ -354,6 +356,24 @@ export default function LotteryPage() {
   const copyLuckyNumber = (num: number) => {
     navigator.clipboard.writeText(String(num)).catch(() => {});
     toast({ title: `Copied #${num}` });
+  };
+
+  const resetDraw = async () => {
+    if (!todayDraw) return;
+    setVoidingDraw(true);
+    try {
+      await apiFetch(`/api/lottery/draws/${todayDraw.id}/reset`, "POST");
+      setShowVoidConfirm(false);
+      setDrawPhase("idle");
+      setWinners([]);
+      setRevealedCount(0);
+      setParticles([]);
+      fetchAll();
+      toast({ title: "Draw voided — ready to re-run", description: "All winner records cleared. You can now run a fresh draw." });
+    } catch (err) {
+      toast({ title: "Could not void draw", description: err instanceof Error ? err.message : undefined, variant: "destructive" });
+    }
+    setVoidingDraw(false);
   };
 
   const copyWinnerMessage = (w: LotteryWinner & LotteryEntry) => {
@@ -641,10 +661,58 @@ export default function LotteryPage() {
                   )}
 
                   {todayDraw.status === "completed" && (
-                    <div className="text-center py-4">
-                      <CheckCircle className="h-8 w-8 text-emerald-400 mx-auto mb-2" />
-                      <p className="text-emerald-400 font-bold">Draw completed</p>
-                      <p className="text-zinc-500 text-sm">Winners have been selected and notified</p>
+                    <div className="space-y-3">
+                      <div className="text-center py-3">
+                        <CheckCircle className="h-8 w-8 text-emerald-400 mx-auto mb-2" />
+                        <p className="text-emerald-400 font-bold">Draw completed</p>
+                        <p className="text-zinc-500 text-sm">Winners have been selected and notified</p>
+                      </div>
+
+                      {/* Void & Redraw section */}
+                      {!showVoidConfirm ? (
+                        <button
+                          onClick={() => setShowVoidConfirm(true)}
+                          className="w-full flex items-center justify-center gap-2 h-10 rounded-xl border text-xs font-bold transition-all hover:border-orange-600 hover:text-orange-400 hover:bg-orange-950/20"
+                          style={{ borderColor: "hsl(0 0% 18%)", color: "hsl(0 0% 45%)" }}
+                        >
+                          <RotateCcw className="h-3.5 w-3.5" />
+                          Void & Redraw
+                        </button>
+                      ) : (
+                        <div className="rounded-xl border border-orange-700/50 bg-orange-950/20 p-4 space-y-3">
+                          <div className="flex items-start gap-2.5">
+                            <ShieldAlert className="h-4 w-4 text-orange-400 flex-shrink-0 mt-0.5" />
+                            <div>
+                              <p className="text-sm font-bold text-orange-300">Void this draw session?</p>
+                              <p className="text-xs text-orange-300/70 mt-1 leading-relaxed">
+                                This will permanently remove all winner records from today's draw and reset the session back to <strong className="text-orange-300">scheduled</strong>. You can then run a completely fresh draw with a new random seed.
+                              </p>
+                              <p className="text-xs text-orange-400/60 mt-1.5 font-medium">
+                                ⚠️ Winner notifications already sent will NOT be recalled.
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex gap-2.5">
+                            <button
+                              onClick={() => setShowVoidConfirm(false)}
+                              disabled={voidingDraw}
+                              className="flex-1 h-9 text-xs border border-zinc-700 text-zinc-400 rounded-lg hover:border-zinc-500 transition-colors disabled:opacity-40"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              onClick={resetDraw}
+                              disabled={voidingDraw}
+                              className="flex-1 h-9 text-xs font-black rounded-lg border border-orange-700 text-orange-300 hover:bg-orange-900/30 transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5"
+                            >
+                              {voidingDraw
+                                ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />Voiding…</>
+                                : <><RotateCcw className="h-3.5 w-3.5" />Yes, Void & Reset</>
+                              }
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

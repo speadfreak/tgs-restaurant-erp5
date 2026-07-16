@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, and, desc, or } from "drizzle-orm";
+import { eq, and, desc, or, inArray } from "drizzle-orm";
 import * as crypto from "crypto";
 import {
   db,
@@ -259,6 +259,43 @@ router.post("/lottery/draws/:id/run", async (req, res): Promise<void> => {
   }).where(eq(lotteryDrawsTable.id, draw.id));
 
   res.json({ drawId: draw.id, seed, totalEntries: entries.length, winners });
+});
+
+// POST /lottery/draws/:id/reset — void a completed draw and reset to scheduled for a re-run
+router.post("/lottery/draws/:id/reset", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+
+  const [draw] = await db.select().from(lotteryDrawsTable).where(eq(lotteryDrawsTable.id, id));
+  if (!draw) { res.status(404).json({ error: "Draw not found" }); return; }
+  if (draw.status === "scheduled") { res.status(400).json({ error: "Draw is already in scheduled state" }); return; }
+
+  // Find all winners for this draw so we can reset their entries
+  const winnerRows = await db.select().from(lotteryWinnersTable).where(eq(lotteryWinnersTable.drawId, id));
+  const entryIds = winnerRows.map(w => w.entryId);
+
+  // Reset entry win flags in bulk
+  if (entryIds.length > 0) {
+    await db.update(lotteryEntriesTable).set({
+      isWinner: false,
+      prizeTier: null,
+      winnerNotified: false,
+      winnerNotifiedAt: null,
+    }).where(inArray(lotteryEntriesTable.id, entryIds));
+  }
+
+  // Remove all winner records for this draw
+  await db.delete(lotteryWinnersTable).where(eq(lotteryWinnersTable.drawId, id));
+
+  // Reset the draw itself back to scheduled with a clean slate
+  const [updated] = await db.update(lotteryDrawsTable).set({
+    status: "scheduled",
+    drawnByUserId: null,
+    drawnAt: null,
+    randomSeed: null,
+  }).where(eq(lotteryDrawsTable.id, id)).returning();
+
+  res.json({ ok: true, draw: updated, winnersCleared: entryIds.length });
 });
 
 // GET /lottery/draws/:id/winners — full winner details for a specific draw
