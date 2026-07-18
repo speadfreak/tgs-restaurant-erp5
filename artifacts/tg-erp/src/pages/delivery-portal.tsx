@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { MyTasks } from "@/components/my-tasks";
 import { getApiBase } from "@/lib/api-base";
+import { isTodayUAE } from "@/lib/date-uae";
 
 interface MenuItem {
   id: number; nameEn: string; nameAm: string; priceAed: number; available: boolean; categoryId: number; photoUrl?: string | null;
@@ -98,7 +99,8 @@ export default function DeliveryPortal() {
   const [orders, setOrders] = useState<DeliveryOrder[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
   const [actionPending, setActionPending] = useState<Record<number, boolean>>({});
-  const [todayStats, setTodayStats] = useState({ completed: 0, commission: 0 });
+  const [todayStats, setTodayStats] = useState({ completed: 0 });
+  const [commissionRate, setCommissionRate] = useState(10);
   const prevReadyCountRef = useRef(0);
   const [lastLucky, setLastLucky] = useState<{ orderCode: string; luckyNumber: number | null; customerName: string; customerPhone: string } | null>(null);
 
@@ -132,16 +134,26 @@ export default function DeliveryPortal() {
       params.set("includeHistory", "true");
       const data: DeliveryOrder[] = await apiFetch(`/api/delivery/queue?${params}`);
       setOrders(data);
-      const today = new Date().toDateString();
-      const todayDone = data.filter(o => o.status === "delivered" && new Date(o.createdAt).toDateString() === today
-        && (o.assignedDeliveryUserId === user?.id || o.relayedByUserId === user?.id));
-      setTodayStats({ completed: todayDone.length, commission: todayDone.length * 5 });
+      // Filter to this rider's own deliveries completed today (UAE timezone = UTC+4)
+      const todayDone = data.filter(o =>
+        o.status === "delivered" &&
+        isTodayUAE(o.updatedAt ?? o.createdAt) &&
+        (o.assignedDeliveryUserId === user?.id || o.relayedByUserId === user?.id)
+      );
+      setTodayStats({ completed: todayDone.length });
       const readyCount = data.filter(o => o.status === "ready" && !o.assignedDeliveryUserId).length;
       if (readyCount > prevReadyCountRef.current) playReadyAlert();
       prevReadyCountRef.current = readyCount;
     } catch { /* ignore */ }
     setLoadingOrders(false);
   }, [user?.branchId, user?.id]);
+
+  // Fetch the admin-configured commission rate once on mount
+  useEffect(() => {
+    apiFetch("/api/finance/commission-rates")
+      .then(data => { if (typeof data?.deliveryCommissionPerOrder === "number") setCommissionRate(data.deliveryCommissionPerOrder); })
+      .catch(() => { /* keep default */ });
+  }, []);
 
   useEffect(() => { fetchMenu(); }, [fetchMenu]);
   useEffect(() => {
@@ -296,9 +308,12 @@ export default function DeliveryPortal() {
   // History: orders this rider delivered, or relayed themselves (so they can see how their own relay turned out).
   // Use updatedAt (= last status-change time) as the delivery-completion timestamp
   // since createdAt is the order creation time, not when it was delivered.
-  const recentlyDelivered = orders.filter(o => o.status === "delivered"
-    && (o.assignedDeliveryUserId === user?.id || o.relayedByUserId === user?.id)
-    && new Date(o.updatedAt ?? o.createdAt).toDateString() === new Date().toDateString());
+  // Only show orders this rider personally delivered today (UAE timezone)
+  const recentlyDelivered = orders.filter(o =>
+    o.status === "delivered" &&
+    (o.assignedDeliveryUserId === user?.id || o.relayedByUserId === user?.id) &&
+    isTodayUAE(o.updatedAt ?? o.createdAt)
+  );
 
   if (isLoading) return (
     <div className="min-h-screen flex items-center justify-center" style={{ background: "hsl(0 0% 4%)" }}>
@@ -343,7 +358,7 @@ export default function DeliveryPortal() {
       {/* Stats bar */}
       <div className="border-y px-4 py-2 flex gap-6 text-sm" style={{ borderColor: "hsl(0 0% 10%)", background: "hsl(0 0% 5%)" }}>
         <span className="text-zinc-600 text-xs">Today: <span className="font-black text-zinc-200">{todayStats.completed}</span> delivered</span>
-        <span className="text-zinc-600 text-xs">Commission: <span className="font-black text-amber-400">{todayStats.commission} AED</span></span>
+        <span className="text-zinc-600 text-xs">Commission: <span className="font-black text-amber-400">{(todayStats.completed * commissionRate).toFixed(0)} AED</span> <span className="text-zinc-700">({commissionRate} AED/order)</span></span>
         {readyToClaim.length > 0 && (
           <span className="flex items-center gap-1 text-emerald-400 font-bold text-xs animate-pulse">
             <Bell className="h-3 w-3" />{readyToClaim.length} ready to claim

@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
-import { format } from "date-fns";
+import { fmtUAE } from "@/lib/date-uae";
 import { Link } from "wouter";
 import { Plus, Search, ShoppingBag } from "lucide-react";
 import { Empty, EmptyTitle, EmptyDescription } from "@/components/ui/empty";
@@ -83,7 +83,7 @@ export default function Orders() {
                   {orders.map((order) => (
                     <TableRow key={order.id}>
                       <TableCell className="font-mono font-medium">{order.orderCode}</TableCell>
-                      <TableCell>{format(new Date(order.createdAt), "MMM d, HH:mm")}</TableCell>
+                      <TableCell>{fmtUAE(order.createdAt)}</TableCell>
                       <TableCell>{order.customerName || "—"}</TableCell>
                       <TableCell className="capitalize">{order.channel}</TableCell>
                       <TableCell className="font-semibold">{order.totalAed} AED</TableCell>

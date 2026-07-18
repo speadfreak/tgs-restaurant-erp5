@@ -390,6 +390,20 @@ router.get("/delivery/queue", authenticate, requireRole(...DELIVERY_ROLES), asyn
   rows = rows.filter(o => (includeHistory ? allStatuses : activeStatuses).includes(o.status));
   if (branchId) rows = rows.filter(o => o.branchId === branchId);
 
+  // When returning history, limit delivered/failed orders to today in UAE time (UTC+4)
+  // so that stale orders from previous days never appear in delivery staff portals.
+  if (includeHistory) {
+    const uaeTodayStr = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" });
+    const startOfUAEToday = new Date(uaeTodayStr + "T00:00:00+04:00");
+    rows = rows.filter(o => {
+      if (o.status === "delivered" || o.status === "failed") {
+        const ts = o.updatedAt ?? o.createdAt;
+        return ts ? new Date(ts) >= startOfUAEToday : false;
+      }
+      return true; // active orders (ready / assigned / out_for_delivery) always shown
+    });
+  }
+
   const nameMap = new Map<number, string>();
   for (const mi of await db.select().from(menuItemsTable)) nameMap.set(mi.id, mi.nameEn);
   const allUsers = await db.select({ id: usersTable.id, name: usersTable.name }).from(usersTable);
