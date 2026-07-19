@@ -340,7 +340,7 @@ router.patch("/kitchen/orders/:id/start", authenticate, requireRole(...KITCHEN_R
     if (percent > 0) {
       const commissionAmount = (Number(order.totalAed) * percent) / 100;
       if (commissionAmount > 0) {
-        await db.insert(commissionsTable).values({ userId: acceptedByUserId, orderId: order.id, amountAed: String(commissionAmount.toFixed(2)), type: "chef_percent" });
+        await db.insert(commissionsTable).values({ userId: acceptedByUserId, orderId: order.id, amountAed: String(commissionAmount.toFixed(2)), type: "chef" });
       }
     }
   } catch { /* ignore commission errors */ }
