@@ -6,9 +6,16 @@ import { useAttendance } from "@/hooks/use-attendance";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
-import { ChefHat, Clock, LogOut, Wifi, WifiOff, Bell, Eye, EyeOff } from "lucide-react";
+import { ChefHat, Clock, LogOut, Wifi, WifiOff, Bell, Eye, EyeOff, DollarSign } from "lucide-react";
 import { MyTasks } from "@/components/my-tasks";
 import { getApiBase } from "@/lib/api-base";
+
+interface CommissionRecord { id: number; orderId: number; amountAed: number; type: string; createdAt: string }
+interface MyEarnings {
+  totalAed: number; orderCount: number; avgPerOrder: number;
+  ratePercent?: number; rateType?: string;
+  records: CommissionRecord[];
+}
 
 interface OrderItem { menuItemName: string | null; quantity: number; unitPrice: number; notes: string | null }
 interface KitchenTicket {
@@ -73,6 +80,7 @@ export default function ChefPortal() {
   const [show86Panel, setShow86Panel] = useState(false);
   const [menuItems, setMenuItems] = useState<MenuItem86[]>([]);
   const [toggling86, setToggling86] = useState<Record<number, boolean>>({});
+  const [myEarnings, setMyEarnings] = useState<MyEarnings | null>(null);
   const prevCountRef = useRef(0);
   const socket = useSocket({ branchId: user?.branchId ?? undefined, userId: user?.id });
   const isKitchenStaff = !!user && ["kitchen_staff", "super_admin", "branch_manager"].includes(user.role);
@@ -88,6 +96,15 @@ export default function ChefPortal() {
     } catch { /* ignore */ }
     setFetching(false);
   }, [user?.branchId]);
+
+  const fetchEarnings = useCallback(async () => {
+    try {
+      // Today in UAE time (UTC+4)
+      const uaeToday = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" });
+      const data: MyEarnings = await apiFetch(`/api/finance/commissions/mine?from=${uaeToday}&to=${uaeToday}`);
+      setMyEarnings(data);
+    } catch { /* ignore */ }
+  }, []);
 
   const fetch86Menu = useCallback(async () => {
     try {
@@ -107,6 +124,13 @@ export default function ChefPortal() {
     const iv = setInterval(fetchQueue, 8000);
     return () => clearInterval(iv);
   }, [fetchQueue]);
+
+  useEffect(() => {
+    if (!isKitchenStaff) return;
+    fetchEarnings();
+    const iv = setInterval(fetchEarnings, 30000);
+    return () => clearInterval(iv);
+  }, [fetchEarnings, isKitchenStaff]);
 
   // Live elapsed timers
   useEffect(() => {
@@ -237,7 +261,7 @@ export default function ChefPortal() {
         <MyTasks socket={socket} />
 
         {/* Stats bar */}
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <div className="rounded-xl border border-amber-900/30 bg-zinc-900/60 px-4 py-3 text-center">
             <div className="text-2xl font-black text-amber-400">{incoming.length}</div>
             <div className="text-xs text-zinc-500 font-medium">Incoming</div>
@@ -249,6 +273,24 @@ export default function ChefPortal() {
           <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-3 text-center">
             <div className="text-2xl font-black text-zinc-300">{tickets.length}</div>
             <div className="text-xs text-zinc-500 font-medium">Total Active</div>
+          </div>
+          {/* Commission stats — today */}
+          <div className="rounded-xl border border-emerald-900/30 bg-zinc-900/60 px-4 py-3 text-center">
+            <div className="flex items-center justify-center gap-1">
+              <DollarSign className="h-3.5 w-3.5 text-emerald-400" />
+              <div className="text-2xl font-black text-emerald-400">
+                {myEarnings ? myEarnings.totalAed.toFixed(1) : "—"}
+              </div>
+            </div>
+            <div className="text-xs text-zinc-500 font-medium">
+              AED Today
+              {myEarnings?.ratePercent !== undefined && (
+                <span className="ml-1 text-zinc-600">({myEarnings.ratePercent}%)</span>
+              )}
+            </div>
+            {myEarnings && myEarnings.orderCount > 0 && (
+              <div className="text-[10px] text-zinc-600 mt-0.5">{myEarnings.orderCount} order{myEarnings.orderCount !== 1 ? "s" : ""}</div>
+            )}
           </div>
         </div>
 

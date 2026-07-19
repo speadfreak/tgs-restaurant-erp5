@@ -27,14 +27,24 @@ function renderLuckyNumberMessage(template: string, luckyNumber: number, drawTim
 // ENTRIES
 // ─────────────────────────────────────────────────────────────────────────────
 
-// GET /lottery/entries?branchId=&date=
+// GET /lottery/entries?branchId=&date=&pendingOnly=true
+// pendingOnly=true returns only entries from dates that have NO completed draw yet
 router.get("/lottery/entries", async (req, res): Promise<void> => {
   const branchId = req.query.branchId ? parseInt(req.query.branchId as string, 10) : undefined;
   const date = req.query.date as string | undefined;
+  const pendingOnly = req.query.pendingOnly === "true";
 
   let rows = await db.select().from(lotteryEntriesTable).orderBy(desc(lotteryEntriesTable.createdAt));
   if (branchId) rows = rows.filter(e => e.branchId === branchId);
   if (date) rows = rows.filter(e => e.drawDate === date);
+
+  // pendingOnly: exclude entries whose drawDate has a completed draw for this branch
+  if (pendingOnly && branchId) {
+    const draws = await db.select().from(lotteryDrawsTable)
+      .then(all => all.filter(d => d.branchId === branchId && d.status === "completed"));
+    const completedDates = new Set(draws.map(d => d.drawDate));
+    rows = rows.filter(e => !completedDates.has(e.drawDate));
+  }
 
   // Enrich with orderCode
   const orderIds = [...new Set(rows.map(r => r.orderId))];

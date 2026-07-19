@@ -333,12 +333,15 @@ router.patch("/kitchen/orders/:id/start", authenticate, requireRole(...KITCHEN_R
   if (!order) { res.status(404).json({ error: "Order not found" }); return; }
   await db.insert(orderStatusHistoryTable).values({ orderId: order.id, status: "preparing", changedBy: acceptedByUserId });
 
-  // Commission: credit chef for accepting this order
+  // Commission: credit chef for accepting this order — calculated as % of order total
   try {
-    const [rateSetting] = await db.select().from(settingsTable).where(eq(settingsTable.key, "chef_commission_per_order"));
-    const rate = rateSetting ? parseFloat(rateSetting.value) : 5;
-    if (rate > 0) {
-      await db.insert(commissionsTable).values({ userId: acceptedByUserId, orderId: order.id, amountAed: String(rate), type: "chef" });
+    const [percentSetting] = await db.select().from(settingsTable).where(eq(settingsTable.key, "chef_commission_percent"));
+    const percent = percentSetting ? parseFloat(percentSetting.value) : 5;
+    if (percent > 0) {
+      const commissionAmount = (Number(order.totalAed) * percent) / 100;
+      if (commissionAmount > 0) {
+        await db.insert(commissionsTable).values({ userId: acceptedByUserId, orderId: order.id, amountAed: String(commissionAmount.toFixed(2)), type: "chef_percent" });
+      }
     }
   } catch { /* ignore commission errors */ }
 

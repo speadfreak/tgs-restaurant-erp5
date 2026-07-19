@@ -5,7 +5,7 @@ import { useSocket } from "@/hooks/use-socket";
 import {
   Trophy, Star, Clock, Sparkles, Loader2, RefreshCw,
   AlertCircle, CheckCircle, Send, ChevronDown, ChevronUp,
-  Settings, Gift, RotateCcw, ShieldAlert
+  Settings, Gift, RotateCcw, ShieldAlert, Copy, ClipboardCheck
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -126,6 +126,134 @@ function makeParticles(count = 60): Particle[] {
   }));
 }
 
+// ── DRAW HISTORY CARD with Copy buttons ─────────────────────────────────────
+function CopyWinnerBtn({ text, label }: { text: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard.writeText(text).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+  return (
+    <button
+      onClick={copy}
+      className="flex-shrink-0 inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-zinc-700 text-zinc-500 hover:border-amber-600 hover:text-amber-400 transition-colors font-semibold"
+    >
+      {copied ? <><ClipboardCheck className="h-3 w-3" />Copied!</> : <><Copy className="h-3 w-3" />{label}</>}
+    </button>
+  );
+}
+
+function CopyAllWinnersBtn({ winners, drawDate }: { winners: DrawWinnerDetail[]; drawDate: string }) {
+  const [copied, setCopied] = useState(false);
+  const buildText = () => {
+    const medals = ["🥇", "🥈", "🥉"];
+    const lines = winners.map((w, i) => {
+      const medal = medals[i] ?? `${i + 1}.`;
+      return `${medal} ${w.prizeTier} — ${w.customerName ?? w.customerPhone} | Lucky #${w.luckyNumber} | Prize: ${w.prizeDescription}`;
+    });
+    return [
+      `🏆 TG's Restaurant (ቲጂ ምግብ ቤት) — Lottery Results`,
+      `Draw Date: ${drawDate}`,
+      "",
+      ...lines,
+      "",
+      "Congratulations to all winners! 🎉",
+    ].join("\n");
+  };
+  const copy = () => {
+    navigator.clipboard.writeText(buildText()).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+  return (
+    <button
+      onClick={copy}
+      className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border font-bold transition-colors"
+      style={{
+        borderColor: copied ? "hsl(142 70% 40% / 0.5)" : "hsl(38 88% 52% / 0.4)",
+        color: copied ? "hsl(142 70% 60%)" : "hsl(38 88% 52%)",
+        background: copied ? "hsl(142 70% 10% / 0.3)" : "hsl(38 50% 8%)",
+      }}
+    >
+      {copied ? <><ClipboardCheck className="h-3.5 w-3.5" />✅ Copied All!</> : <><Copy className="h-3.5 w-3.5" />📋 Copy All Winners</>}
+    </button>
+  );
+}
+
+function DrawHistoryCard({
+  draw, isOpen, winnersList, loadingWinners, onToggle, onToggleClaimed,
+}: {
+  draw: LotteryDraw;
+  isOpen: boolean;
+  winnersList: DrawWinnerDetail[];
+  loadingWinners: boolean;
+  onToggle: () => void;
+  onToggleClaimed: (w: DrawWinnerDetail) => void;
+}) {
+  const buildWinnerMsg = (w: DrawWinnerDetail) =>
+    `🎉 እንኳን ደስ አለዎ! / Congratulations!\nTG's Restaurant (ቲጂ ምግብ ቤት)\nYour lucky number #${w.luckyNumber} has WON!\nPrize: ${w.prizeDescription}\nPlease contact us to claim your prize.`;
+
+  return (
+    <div className="rounded-xl border overflow-hidden" style={{ background: "hsl(0 0% 5%)", borderColor: "hsl(0 0% 10%)" }}>
+      <button
+        onClick={onToggle}
+        className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/[0.02] transition-colors"
+      >
+        <div>
+          <span className="code-text text-zinc-300 text-sm">{draw.drawDate}</span>
+          <span className="text-xs text-zinc-600 ml-3">{draw.totalEntries} entries</span>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="live-badge"><CheckCircle className="h-3 w-3" />Completed</span>
+          {isOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+        </div>
+      </button>
+      {isOpen && (
+        <div className="border-t px-4 py-3 space-y-2" style={{ borderColor: "hsl(0 0% 10%)" }}>
+          {loadingWinners && winnersList.length === 0 ? (
+            <div className="text-center py-4"><Loader2 className="h-4 w-4 animate-spin mx-auto text-zinc-600" /></div>
+          ) : winnersList.length === 0 ? (
+            <p className="text-xs text-zinc-600 text-center py-2">No winners recorded for this draw</p>
+          ) : (
+            <>
+              {/* Copy All button */}
+              <div className="flex justify-end pb-1">
+                <CopyAllWinnersBtn winners={winnersList} drawDate={draw.drawDate} />
+              </div>
+              {/* Per-winner rows */}
+              {winnersList.map(w => (
+                <div key={w.winnerId} className="flex items-center justify-between gap-2 rounded-lg px-3 py-2" style={{ background: "hsl(0 0% 7%)" }}>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="code-text font-black text-amber-400">#{w.luckyNumber}</span>
+                      <span className="text-xs font-bold text-zinc-400 uppercase tracking-wide">{w.prizeTier}</span>
+                    </div>
+                    <div className="text-xs text-zinc-500 truncate">{w.customerName ?? "—"} · {w.customerPhone} · {w.prizeDescription}</div>
+                  </div>
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <CopyWinnerBtn text={buildWinnerMsg(w)} label="Copy" />
+                    <button
+                      onClick={() => onToggleClaimed(w)}
+                      className={`inline-flex items-center gap-1.5 text-xs px-3 py-1 rounded-full border font-bold transition-all ${
+                        w.claimed
+                          ? "border-emerald-700 bg-emerald-950/40 text-emerald-400"
+                          : "border-zinc-700 text-zinc-500 hover:border-amber-600 hover:text-amber-400"
+                      }`}
+                    >
+                      {w.claimed ? <><CheckCircle className="h-3 w-3" />Claimed</> : "Mark Claimed"}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function LotteryPage() {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -216,8 +344,9 @@ export default function LotteryPage() {
     }
   };
 
-  const today = new Date().toISOString().split("T")[0];
-  const todayDraw = draws.find(d => d.drawDate === today);
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" });
+  // activeDraw = the most recent NON-completed draw (could be from a prior date if admin hasn't drawn yet)
+  const activeDraw = draws.find(d => d.status !== "completed") ?? null;
 
   useEffect(() => {
     if (user?.branchId) return; // already scoped to one branch, no picker needed
@@ -229,7 +358,8 @@ export default function LotteryPage() {
     setLoading(true);
     try {
       const [e, d, s] = await Promise.all([
-        apiFetch(`/api/lottery/entries?branchId=${activeBranchId}&date=${today}`),
+        // pendingOnly=true: returns ALL entries that don't have a completed draw yet (persists past midnight)
+        apiFetch(`/api/lottery/entries?branchId=${activeBranchId}&pendingOnly=true`),
         apiFetch(`/api/lottery/draws?branchId=${activeBranchId}`),
         apiFetch(`/api/lottery/settings/${activeBranchId}`),
       ]);
@@ -267,22 +397,24 @@ export default function LotteryPage() {
       toast({ title: "Select a branch first", variant: "destructive" });
       return;
     }
+    // Use the draw date of the oldest pending entry, or today if no pending entries
+    const drawDate = entries.length > 0 ? entries[entries.length - 1].drawDate : today;
     try {
       await apiFetch("/api/lottery/draws", "POST", {
         branchId: activeBranchId,
-        drawDate: today,
+        drawDate,
         drawTime: settings?.drawTime ?? "22:00",
         prizeConfig: settings?.prizeConfig ?? '[{"tier":"First Prize","count":1,"prize":"Free Meal"}]',
       });
       fetchAll();
-      toast({ title: "Draw session created for today" });
+      toast({ title: "Draw session created" });
     } catch (err) {
       toast({ title: "Could not create draw session", description: err instanceof Error ? err.message : undefined, variant: "destructive" });
     }
   };
 
   const runDraw = async () => {
-    if (!todayDraw) return;
+    if (!activeDraw) return;
     setShowConfirm(false);
     setRunningDraw(true);
     setDrawPhase("countdown");
@@ -305,7 +437,7 @@ export default function LotteryPage() {
     await new Promise(r => setTimeout(r, 1500));
 
     try {
-      const result = await apiFetch(`/api/lottery/draws/${todayDraw.id}/run`, "POST");
+      const result = await apiFetch(`/api/lottery/draws/${activeDraw!.id}/run`, "POST");
       setDrawPhase("revealing");
       const winnerList: (LotteryWinner & LotteryEntry)[] = result.winners ?? [];
       setWinners(winnerList);
@@ -359,10 +491,10 @@ export default function LotteryPage() {
   };
 
   const resetDraw = async () => {
-    if (!todayDraw) return;
+    if (!activeDraw) return;
     setVoidingDraw(true);
     try {
-      await apiFetch(`/api/lottery/draws/${todayDraw.id}/reset`, "POST");
+      await apiFetch(`/api/lottery/draws/${activeDraw.id}/reset`, "POST");
       setShowVoidConfirm(false);
       setDrawPhase("idle");
       setWinners([]);
@@ -489,7 +621,7 @@ export default function LotteryPage() {
               )}
               <div className="text-center px-4 py-2 rounded-xl border" style={{ background: "hsl(38 30% 6%)", borderColor: "hsl(38 30% 15%)" }}>
                 <div className="code-text text-2xl font-black text-amber-400 leading-none">{sentEntries.length}</div>
-                <div className="cinema-subtitle mt-0.5">Entries Today</div>
+                <div className="cinema-subtitle mt-0.5">Active Entries</div>
               </div>
               <button onClick={fetchAll} disabled={loading} className="p-2 rounded-lg border border-zinc-700 text-zinc-500 hover:text-zinc-200 transition-colors">
                 <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
@@ -502,7 +634,7 @@ export default function LotteryPage() {
             {(["live", "draw", "settings"] as const).map(t => (
               <button key={t} onClick={() => setTab(t)}
                 className={`px-4 py-2.5 text-xs font-semibold uppercase tracking-wider border-b-2 transition-all ${tab === t ? "border-amber-500 text-amber-400" : "border-transparent text-zinc-500 hover:text-zinc-300"}`}>
-                {t === "live" ? `Today's Numbers (${entries.length})` : t === "draw" ? "Draw" : "Settings"}
+                {t === "live" ? `Active Entries (${entries.length})` : t === "draw" ? "Draw" : "Settings"}
               </button>
             ))}
           </div>
@@ -586,21 +718,23 @@ export default function LotteryPage() {
         {/* ── DRAW TAB ───────────────────────── */}
         {tab === "draw" && (
           <div className="space-y-6">
-            {/* Today's draw status */}
+            {/* Active draw status */}
             <div className="cinema-card rounded-2xl p-6">
               <div className="flex items-center justify-between mb-4">
                 <div>
-                  <h3 className="cinema-title-sm text-amber-400 text-base">Today's Draw</h3>
-                  <p className="cinema-subtitle">{today}</p>
+                  <h3 className="cinema-title-sm text-amber-400 text-base">Active Draw</h3>
+                  <p className="cinema-subtitle">
+                    {activeDraw ? `Draw date: ${activeDraw.drawDate}` : "No pending draw session"}
+                  </p>
                 </div>
-                {!todayDraw && (
+                {!activeDraw && (
                   <button onClick={createTodayDraw} disabled={!activeBranchId} className="btn-cinema text-xs disabled:opacity-40 disabled:cursor-not-allowed" title={!activeBranchId ? "Select a branch first" : undefined}>
                     Create Draw Session
                   </button>
                 )}
               </div>
 
-              {todayDraw ? (
+              {activeDraw ? (
                 <div className="space-y-4">
                   <div className="grid grid-cols-3 gap-4">
                     <div className="text-center p-3 rounded-xl" style={{ background: "hsl(0 0% 7%)" }}>
@@ -608,24 +742,24 @@ export default function LotteryPage() {
                       <div className="cinema-subtitle mt-0.5">Eligible Entries</div>
                     </div>
                     <div className="text-center p-3 rounded-xl" style={{ background: "hsl(0 0% 7%)" }}>
-                      <div className="cinema-title-sm text-base text-zinc-200">{todayDraw.drawTime}</div>
+                      <div className="cinema-title-sm text-base text-zinc-200">{activeDraw.drawTime}</div>
                       <div className="cinema-subtitle mt-0.5">Draw Time</div>
                     </div>
                     <div className="text-center p-3 rounded-xl" style={{ background: "hsl(0 0% 7%)" }}>
-                      <div className={`text-base font-bold capitalize ${todayDraw.status === "completed" ? "text-emerald-400" : "text-amber-400"}`}>
-                        {todayDraw.status}
+                      <div className={`text-base font-bold capitalize ${activeDraw.status === "completed" ? "text-emerald-400" : "text-amber-400"}`}>
+                        {activeDraw.status}
                       </div>
                       <div className="cinema-subtitle mt-0.5">Status</div>
                     </div>
                   </div>
 
-                  {todayDraw.status !== "completed" && sentEntries.length === 0 && (
+                  {activeDraw.status !== "completed" && sentEntries.length === 0 && (
                     <div className="rounded-xl border border-amber-700/30 bg-amber-950/10 p-4 text-sm text-amber-300/80">
-                      <strong>No eligible entries yet.</strong> Go to the <button onClick={() => setTab("live")} className="underline hover:text-amber-400">Today's Numbers</button> tab, then mark each sent lucky number as "sent" using the toggle. Once at least one is marked, the draw button will appear here.
+                      <strong>No eligible entries yet.</strong> Go to the <button onClick={() => setTab("live")} className="underline hover:text-amber-400">Active Entries</button> tab, then mark each sent lucky number as "sent" using the toggle. Once at least one is marked, the draw button will appear here.
                     </div>
                   )}
 
-                  {todayDraw.status !== "completed" && sentEntries.length > 0 && (
+                  {activeDraw.status !== "completed" && sentEntries.length > 0 && (
                     <>
                       <div className="rounded-xl border p-3 flex items-center justify-between text-sm" style={{ borderColor: "hsl(0 0% 14%)", background: "hsl(0 0% 6%)" }}>
                         <span className="text-zinc-400">Configured to select</span>
@@ -654,13 +788,13 @@ export default function LotteryPage() {
                           className="w-full h-14 rounded-xl font-black text-base text-black transition-all hover:opacity-90"
                           style={{ background: "linear-gradient(135deg, hsl(38 88% 52%), hsl(38 88% 42%))", boxShadow: "0 0 30px hsl(38 88% 52% / 0.3)" }}
                         >
-                          🏆 Run Today's Draw
+                          🏆 Run Draw
                         </button>
                       )}
                     </>
                   )}
 
-                  {todayDraw.status === "completed" && (
+                  {activeDraw.status === "completed" && (
                     <div className="space-y-3">
                       <div className="text-center py-3">
                         <CheckCircle className="h-8 w-8 text-emerald-400 mx-auto mb-2" />
@@ -685,7 +819,7 @@ export default function LotteryPage() {
                             <div>
                               <p className="text-sm font-bold text-orange-300">Void this draw session?</p>
                               <p className="text-xs text-orange-300/70 mt-1 leading-relaxed">
-                                This will permanently remove all winner records from today's draw and reset the session back to <strong className="text-orange-300">scheduled</strong>. You can then run a completely fresh draw with a new random seed.
+                                This will permanently remove all winner records from this draw and reset the session back to <strong className="text-orange-300">scheduled</strong>. You can then run a completely fresh draw with a new random seed.
                               </p>
                               <p className="text-xs text-orange-400/60 mt-1.5 font-medium">
                                 ⚠️ Winner notifications already sent will NOT be recalled.
@@ -719,66 +853,29 @@ export default function LotteryPage() {
               ) : (
                 <div className="text-center py-8 text-zinc-600">
                   <Trophy className="h-8 w-8 mx-auto mb-2 opacity-30" />
-                  <p className="text-sm">No draw session created for today</p>
+                  <p className="text-sm">No pending draw session — create one to start</p>
                 </div>
               )}
             </div>
 
-            {/* Past draws */}
+            {/* Past draws (Winners History) */}
             {draws.filter(d => d.status === "completed").length > 0 && (
               <div>
-                <h3 className="cinema-title-sm text-zinc-400 text-sm mb-3">Past Draws</h3>
+                <h3 className="cinema-title-sm text-zinc-400 text-sm mb-3">Winners History</h3>
                 <div className="space-y-2">
                   {draws.filter(d => d.status === "completed").slice(0, 7).map(draw => {
                     const isOpen = expandedDrawId === draw.id;
                     const winnersList = drawWinners[draw.id] ?? [];
                     return (
-                      <div key={draw.id} className="rounded-xl border overflow-hidden" style={{ background: "hsl(0 0% 5%)", borderColor: "hsl(0 0% 10%)" }}>
-                        <button
-                          onClick={() => toggleDrawWinners(draw.id)}
-                          className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/[0.02] transition-colors"
-                        >
-                          <div>
-                            <span className="code-text text-zinc-300 text-sm">{draw.drawDate}</span>
-                            <span className="text-xs text-zinc-600 ml-3">{draw.totalEntries} entries</span>
-                          </div>
-                          <div className="flex items-center gap-3">
-                            <span className="live-badge"><CheckCircle className="h-3 w-3" />Completed</span>
-                            {isOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
-                          </div>
-                        </button>
-                        {isOpen && (
-                          <div className="border-t px-4 py-3 space-y-2" style={{ borderColor: "hsl(0 0% 10%)" }}>
-                            {loadingWinners && winnersList.length === 0 ? (
-                              <div className="text-center py-4"><Loader2 className="h-4 w-4 animate-spin mx-auto text-zinc-600" /></div>
-                            ) : winnersList.length === 0 ? (
-                              <p className="text-xs text-zinc-600 text-center py-2">No winners recorded for this draw</p>
-                            ) : (
-                              winnersList.map(w => (
-                                <div key={w.winnerId} className="flex items-center justify-between gap-3 rounded-lg px-3 py-2" style={{ background: "hsl(0 0% 7%)" }}>
-                                  <div className="min-w-0">
-                                    <div className="flex items-center gap-2">
-                                      <span className="code-text font-black text-amber-400">#{w.luckyNumber}</span>
-                                      <span className="text-xs font-bold text-zinc-400 uppercase tracking-wide">{w.prizeTier}</span>
-                                    </div>
-                                    <div className="text-xs text-zinc-500 truncate">{w.customerName ?? "—"} · {w.customerPhone} · {w.prizeDescription}</div>
-                                  </div>
-                                  <button
-                                    onClick={() => toggleClaimed(w, draw.id)}
-                                    className={`flex-shrink-0 inline-flex items-center gap-1.5 text-xs px-3 py-1 rounded-full border font-bold transition-all ${
-                                      w.claimed
-                                        ? "border-emerald-700 bg-emerald-950/40 text-emerald-400"
-                                        : "border-zinc-700 text-zinc-500 hover:border-amber-600 hover:text-amber-400"
-                                    }`}
-                                  >
-                                    {w.claimed ? <><CheckCircle className="h-3 w-3" />Claimed</> : "Mark Claimed"}
-                                  </button>
-                                </div>
-                              ))
-                            )}
-                          </div>
-                        )}
-                      </div>
+                      <DrawHistoryCard
+                        key={draw.id}
+                        draw={draw}
+                        isOpen={isOpen}
+                        winnersList={winnersList}
+                        loadingWinners={loadingWinners}
+                        onToggle={() => toggleDrawWinners(draw.id)}
+                        onToggleClaimed={(w) => toggleClaimed(w, draw.id)}
+                      />
                     );
                   })}
                 </div>

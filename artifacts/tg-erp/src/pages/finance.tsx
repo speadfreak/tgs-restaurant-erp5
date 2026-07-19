@@ -37,7 +37,7 @@ interface CommissionData {
   totalCommissions: number;
   totalChefCommissions: number;
   totalDeliveryCommissions: number;
-  chefCommissionPerOrder: number;
+  chefCommissionPercent: number;
   deliveryCommissionPerOrder: number;
   staffBreakdown: StaffCommission[];
 }
@@ -82,7 +82,7 @@ export default function Finance() {
     apiFetch(`/api/finance/commissions${qs}`)
       .then((data: CommissionData) => {
         setCommissions(data);
-        setChefRate(String(data.chefCommissionPerOrder));
+        setChefRate(String(data.chefCommissionPercent));
         setDeliveryRate(String(data.deliveryCommissionPerOrder));
       })
       .catch(() => {});
@@ -96,7 +96,7 @@ export default function Finance() {
       await apiFetch("/api/finance/commission-rates", {
         method: "PATCH",
         body: JSON.stringify({
-          chefCommissionPerOrder: parseFloat(chefRate) || 0,
+          chefCommissionPercent: parseFloat(chefRate) || 0,
           deliveryCommissionPerOrder: parseFloat(deliveryRate) || 0,
         }),
       });
@@ -209,7 +209,7 @@ export default function Finance() {
               Staff Commissions
             </CardTitle>
             <p className="text-sm text-muted-foreground mt-1">
-              Auto-calculated per completed order. Chef earns on acceptance, delivery earns on completion.
+              Chef earns a % of each order total on acceptance. Delivery earns a flat AED on completion.
             </p>
           </div>
           <Button variant="outline" size="sm" onClick={() => setShowRateEdit(v => !v)} className="shrink-0">
@@ -221,13 +221,14 @@ export default function Finance() {
           {/* Rate editor */}
           {showRateEdit && (
             <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-4 space-y-3">
-              <h3 className="text-sm font-semibold text-amber-400">Commission Rates per Order</h3>
+              <h3 className="text-sm font-semibold text-amber-400">Commission Rates</h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1">
                   <Label className="text-xs text-muted-foreground flex items-center gap-1.5">
-                    <ChefHat className="h-3.5 w-3.5" /> Chef commission (AED / order)
+                    <ChefHat className="h-3.5 w-3.5" /> Chef commission (% of order total)
                   </Label>
-                  <Input type="number" step="0.5" min="0" value={chefRate} onChange={e => setChefRate(e.target.value)} placeholder="5" className="h-9" />
+                  <Input type="number" step="0.5" min="0" max="100" value={chefRate} onChange={e => setChefRate(e.target.value)} placeholder="5" className="h-9" />
+                  <p className="text-[11px] text-muted-foreground">e.g. "5" = 5% of each order total</p>
                 </div>
                 <div className="space-y-1">
                   <Label className="text-xs text-muted-foreground flex items-center gap-1.5">
@@ -251,7 +252,7 @@ export default function Finance() {
             <div className="flex items-center gap-2 rounded-full px-3 py-1.5 bg-amber-500/10 border border-amber-500/20 text-sm">
               <ChefHat className="h-4 w-4 text-amber-400" />
               <span className="text-muted-foreground">Chef rate:</span>
-              <span className="font-bold text-amber-400">{commissions?.chefCommissionPerOrder ?? 5} AED / order</span>
+              <span className="font-bold text-amber-400">{commissions?.chefCommissionPercent ?? 5}% of order total</span>
             </div>
             <div className="flex items-center gap-2 rounded-full px-3 py-1.5 bg-blue-500/10 border border-blue-500/20 text-sm">
               <Bike className="h-4 w-4 text-blue-400" />

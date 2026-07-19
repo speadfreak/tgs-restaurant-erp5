@@ -22,7 +22,8 @@ async function apiFetch(path: string) {
 interface MyRecord { id: number; orderId: number; amountAed: number; type: string; createdAt: string }
 interface MyEarnings {
   userId: number; name: string; role: string; type: string;
-  totalAed: number; orderCount: number; avgPerOrder: number; ratePerOrder: number;
+  totalAed: number; orderCount: number; avgPerOrder: number;
+  ratePerOrder?: number; ratePercent?: number; rateType?: "flat" | "percent";
   records: MyRecord[];
 }
 
@@ -30,7 +31,7 @@ interface AdminRecord extends MyRecord { userId: number; userName: string }
 interface StaffBreakdown { userId: number; name: string; role: string; type: string; orderCount: number; totalAed: number }
 interface AllCommissions {
   totalCommissions: number; totalChefCommissions: number; totalDeliveryCommissions: number;
-  chefCommissionPerOrder: number; deliveryCommissionPerOrder: number;
+  chefCommissionPercent: number; deliveryCommissionPerOrder: number;
   staffBreakdown: StaffBreakdown[];
   records: AdminRecord[];
 }
@@ -137,8 +138,12 @@ function StaffEarnings({ from, to }: { from: string; to: string }) {
             </CardTitle>
           </CardHeader>
           <CardContent className="px-4 pb-4">
-            <div className="text-2xl font-bold">{data.ratePerOrder} AED</div>
-            <p className="text-[11px] text-muted-foreground mt-0.5">per order (set by admin)</p>
+            <div className="text-2xl font-bold">
+              {data.rateType === "percent" ? `${data.ratePercent}%` : `${data.ratePerOrder} AED`}
+            </div>
+            <p className="text-[11px] text-muted-foreground mt-0.5">
+              {data.rateType === "percent" ? "% of order total (set by admin)" : "per order (set by admin)"}
+            </p>
           </CardContent>
         </Card>
       </div>
@@ -259,7 +264,7 @@ function AdminEarnings({ from, to }: { from: string; to: string }) {
           </CardHeader>
           <CardContent className="px-4 pb-4">
             <div className="text-2xl font-bold text-amber-400">{data.totalChefCommissions.toLocaleString()} AED</div>
-            <p className="text-[11px] text-muted-foreground mt-0.5">{data.chefCommissionPerOrder} AED/order rate</p>
+            <p className="text-[11px] text-muted-foreground mt-0.5">{data.chefCommissionPercent ?? "—"}% of order total</p>
           </CardContent>
         </Card>
 

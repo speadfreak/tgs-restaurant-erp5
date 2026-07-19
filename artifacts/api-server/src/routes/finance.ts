@@ -37,9 +37,16 @@ router.get("/finance/commissions/mine", authenticate, async (req, res): Promise<
 
   // Determine commission rate based on role
   const role = req.user!.role;
-  const rateKey = role === "kitchen_staff" ? "chef_commission_per_order" : "delivery_commission_per_order";
-  const [rateSetting] = await db.select().from(settingsTable).where(eq(settingsTable.key, rateKey));
-  const ratePerOrder = rateSetting ? parseFloat(rateSetting.value) : (role === "kitchen_staff" ? 5 : 10);
+  let rateInfo: { ratePerOrder?: number; ratePercent?: number; rateType: "flat" | "percent" };
+  if (role === "kitchen_staff") {
+    const [ps] = await db.select().from(settingsTable).where(eq(settingsTable.key, "chef_commission_percent"));
+    const percent = ps ? parseFloat(ps.value) : 5;
+    rateInfo = { ratePercent: percent, rateType: "percent" };
+  } else {
+    const [rs] = await db.select().from(settingsTable).where(eq(settingsTable.key, "delivery_commission_per_order"));
+    const rate = rs ? parseFloat(rs.value) : 10;
+    rateInfo = { ratePerOrder: rate, rateType: "flat" };
+  }
 
   res.json({
     userId,
@@ -49,7 +56,7 @@ router.get("/finance/commissions/mine", authenticate, async (req, res): Promise<
     totalAed,
     orderCount,
     avgPerOrder: orderCount > 0 ? totalAed / orderCount : 0,
-    ratePerOrder,
+    ...rateInfo,
     records: records.map(c => ({
       id: c.id,
       orderId: c.orderId,
@@ -350,26 +357,26 @@ router.get("/finance/revenue-trend", async (req, res): Promise<void> => {
 // ── COMMISSION RATES ────────────────────────────────────────────────────────
 
 router.get("/finance/commission-rates", async (_req, res): Promise<void> => {
-  const settings = await db.select().from(settingsTable)
-    .where(eq(settingsTable.key, "chef_commission_per_order"));
+  const chefPercent = await db.select().from(settingsTable)
+    .where(eq(settingsTable.key, "chef_commission_percent"));
   const delivery = await db.select().from(settingsTable)
     .where(eq(settingsTable.key, "delivery_commission_per_order"));
   res.json({
-    chefCommissionPerOrder: settings[0] ? parseFloat(settings[0].value) : 5,
+    chefCommissionPercent: chefPercent[0] ? parseFloat(chefPercent[0].value) : 5,
     deliveryCommissionPerOrder: delivery[0] ? parseFloat(delivery[0].value) : 10,
   });
 });
 
 router.patch("/finance/commission-rates", async (req, res): Promise<void> => {
-  const { chefCommissionPerOrder, deliveryCommissionPerOrder } = req.body;
+  const { chefCommissionPercent, deliveryCommissionPerOrder } = req.body;
   const updatedBy = req.user!.id;
-  if (typeof chefCommissionPerOrder === "number" && chefCommissionPerOrder >= 0) {
+  if (typeof chefCommissionPercent === "number" && chefCommissionPercent >= 0) {
     await db.insert(settingsTable).values({
-      key: "chef_commission_per_order",
-      value: String(chefCommissionPerOrder),
+      key: "chef_commission_percent",
+      value: String(chefCommissionPercent),
       isSensitive: false,
       updatedByUserId: updatedBy,
-    }).onConflictDoUpdate({ target: settingsTable.key, set: { value: String(chefCommissionPerOrder), updatedByUserId: updatedBy } });
+    }).onConflictDoUpdate({ target: settingsTable.key, set: { value: String(chefCommissionPercent), updatedByUserId: updatedBy } });
   }
   if (typeof deliveryCommissionPerOrder === "number" && deliveryCommissionPerOrder >= 0) {
     await db.insert(settingsTable).values({
@@ -425,14 +432,14 @@ router.get("/finance/commissions", async (req, res): Promise<void> => {
   const totalDeliveryCommissions = staffBreakdown.filter(s => s.type === "delivery").reduce((a, s) => a + s.totalAed, 0);
   const totalCommissions = totalChefCommissions + totalDeliveryCommissions;
 
-  const chefRateSetting = await db.select().from(settingsTable).where(eq(settingsTable.key, "chef_commission_per_order"));
+  const chefPercentSetting = await db.select().from(settingsTable).where(eq(settingsTable.key, "chef_commission_percent"));
   const deliveryRateSetting = await db.select().from(settingsTable).where(eq(settingsTable.key, "delivery_commission_per_order"));
 
   res.json({
     totalCommissions,
     totalChefCommissions,
     totalDeliveryCommissions,
-    chefCommissionPerOrder: chefRateSetting[0] ? parseFloat(chefRateSetting[0].value) : 5,
+    chefCommissionPercent: chefPercentSetting[0] ? parseFloat(chefPercentSetting[0].value) : 5,
     deliveryCommissionPerOrder: deliveryRateSetting[0] ? parseFloat(deliveryRateSetting[0].value) : 10,
     staffBreakdown,
     records: rows.map(c => ({
