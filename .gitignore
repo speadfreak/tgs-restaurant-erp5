@@ -1,5 +1,8 @@
 # See https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files for more about ignoring files.
 
+# Boot-up prompts and session reference files (may contain env vars/URLs)
+attached_assets/Pasted-*.txt
+
 # compiled output
 dist
 tmp
