@@ -252,6 +252,18 @@ router.get("/finance/entries/summary", authenticate, requireRole(...FINANCE_ROLE
   res.json({ date, branchId, totalIncome, totalExpense, netBalance: totalIncome - totalExpense, entryCount: entries.length });
 });
 
+// ── COMMISSION RATES (public read — all authenticated staff need this) ───────
+router.get("/finance/commission-rates", authenticate, async (_req, res): Promise<void> => {
+  const chefPercent = await db.select().from(settingsTable)
+    .where(eq(settingsTable.key, "chef_commission_percent"));
+  const delivery = await db.select().from(settingsTable)
+    .where(eq(settingsTable.key, "delivery_commission_per_order"));
+  res.json({
+    chefCommissionPercent: chefPercent[0] ? parseFloat(chefPercent[0].value) : 5,
+    deliveryCommissionPerOrder: delivery[0] ? parseFloat(delivery[0].value) : 10,
+  });
+});
+
 // ── ADMIN-ONLY MIDDLEWARE ────────────────────────────────────────────────────
 router.use("/finance", authenticate, requireRole(...ADMIN_ROLES));
 
@@ -354,18 +366,7 @@ router.get("/finance/revenue-trend", async (req, res): Promise<void> => {
   res.json(GetRevenueTrendResponse.parse(trend));
 });
 
-// ── COMMISSION RATES ────────────────────────────────────────────────────────
-
-router.get("/finance/commission-rates", async (_req, res): Promise<void> => {
-  const chefPercent = await db.select().from(settingsTable)
-    .where(eq(settingsTable.key, "chef_commission_percent"));
-  const delivery = await db.select().from(settingsTable)
-    .where(eq(settingsTable.key, "delivery_commission_per_order"));
-  res.json({
-    chefCommissionPercent: chefPercent[0] ? parseFloat(chefPercent[0].value) : 5,
-    deliveryCommissionPerOrder: delivery[0] ? parseFloat(delivery[0].value) : 10,
-  });
-});
+// ── COMMISSION RATES (PATCH — admin only, gate above applies) ───────────────
 
 router.patch("/finance/commission-rates", async (req, res): Promise<void> => {
   const { chefCommissionPercent, deliveryCommissionPerOrder } = req.body;
