@@ -148,12 +148,13 @@ export default function DeliveryPortal() {
     setLoadingOrders(false);
   }, [user?.branchId, user?.id]);
 
-  // Fetch the admin-configured commission rate once on mount
+  // Fetch the admin-configured commission rate — wait until user (and auth token) is ready
   useEffect(() => {
+    if (!user?.id) return;
     apiFetch("/api/finance/commission-rates")
       .then(data => { if (typeof data?.deliveryCommissionPerOrder === "number") setCommissionRate(data.deliveryCommissionPerOrder); })
       .catch(() => { /* keep default */ });
-  }, []);
+  }, [user?.id]);
 
   useEffect(() => { fetchMenu(); }, [fetchMenu]);
   useEffect(() => {
