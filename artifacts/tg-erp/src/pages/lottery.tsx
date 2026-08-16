@@ -6,6 +6,7 @@ import {
   Trophy, Star, Clock, Sparkles, Loader2, RefreshCw,
   AlertCircle, CheckCircle, Send, ChevronDown, ChevronUp,
   Settings, Gift, RotateCcw, ShieldAlert, Copy, ClipboardCheck
+  , ClipboardList, PlusCircle
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -289,6 +290,8 @@ export default function LotteryPage() {
   const [expandedDrawId, setExpandedDrawId] = useState<number | null>(null);
   const [drawWinners, setDrawWinners] = useState<Record<number, DrawWinnerDetail[]>>({});
   const [loadingWinners, setLoadingWinners] = useState(false);
+  const [manualCodes, setManualCodes] = useState("");
+  const [syncingEntries, setSyncingEntries] = useState(false);
 
   const totalConfiguredWinners = prizeTiers.reduce((sum, t) => sum + (t.count || 0), 0);
 
@@ -347,6 +350,7 @@ export default function LotteryPage() {
   const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" });
   // activeDraw = the most recent NON-completed draw (could be from a prior date if admin hasn't drawn yet)
   const activeDraw = draws.find(d => d.status !== "completed") ?? null;
+  const sessionDate = activeDraw?.drawDate ?? (entries.length > 0 ? entries[entries.length - 1].drawDate : today);
 
   useEffect(() => {
     if (user?.branchId) return; // already scoped to one branch, no picker needed
@@ -390,6 +394,53 @@ export default function LotteryPage() {
     } catch {
       toast({ title: "Retry failed", variant: "destructive" });
     }
+  };
+
+  const syncMissingEntries = async () => {
+    if (!activeBranchId) return;
+    setSyncingEntries(true);
+    try {
+      const result = await apiFetch("/api/lottery/entries/sync", "POST", {
+        branchId: activeBranchId,
+        drawDate: sessionDate,
+      });
+      await fetchAll();
+      toast({
+        title: "Lottery session reconciled",
+        description: `${result.scanned ?? 0} orders scanned, ${result.createdCount ?? 0} missing entries added.`,
+      });
+    } catch {
+      toast({ title: "Could not reconcile lottery entries", variant: "destructive" });
+    }
+    setSyncingEntries(false);
+  };
+
+  const addManualEntries = async () => {
+    if (!activeBranchId) return;
+    const orderCodes = manualCodes.split(/[,\n]/).map(code => code.trim()).filter(Boolean);
+    if (!orderCodes.length) {
+      toast({ title: "Enter at least one order code or order number", variant: "destructive" });
+      return;
+    }
+    setSyncingEntries(true);
+    try {
+      const result = await apiFetch("/api/lottery/entries/manual", "POST", {
+        branchId: activeBranchId,
+        drawDate: sessionDate,
+        orderCodes,
+      });
+      setManualCodes("");
+      await fetchAll();
+      const issueCount = (result.errors ?? []).length;
+      toast({
+        title: `${result.addedCount ?? 0} order${result.addedCount === 1 ? "" : "s"} added to session`,
+        description: issueCount ? `${issueCount} code${issueCount === 1 ? "" : "s"} could not be added.` : "The session is up to date.",
+        variant: issueCount ? "destructive" : undefined,
+      });
+    } catch {
+      toast({ title: "Could not add order to session", variant: "destructive" });
+    }
+    setSyncingEntries(false);
   };
 
   const createTodayDraw = async () => {
@@ -652,6 +703,47 @@ export default function LotteryPage() {
               <p className="text-sm text-amber-200/80">
                 Copy each lucky number and send it to the customer via WhatsApp manually. Numbers are generated automatically when orders are created.
               </p>
+            </div>
+
+            <div className="rounded-xl border p-4 space-y-3" style={{ borderColor: "hsl(38 30% 15%)", background: "hsl(38 30% 6%)" }}>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-bold text-amber-300 flex items-center gap-2">
+                    <ClipboardList className="h-4 w-4" />Session controls
+                  </h3>
+                  <p className="text-xs text-zinc-500 mt-1">Repair missing orders for the {sessionDate} UAE session without losing existing entries.</p>
+                </div>
+                <button
+                  onClick={syncMissingEntries}
+                  disabled={syncingEntries || !activeBranchId}
+                  className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-2 rounded-lg border border-amber-600/40 text-amber-400 hover:bg-amber-950/30 disabled:opacity-40"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${syncingEntries ? "animate-spin" : ""}`} />
+                  Import Missing Orders
+                </button>
+              </div>
+              {user?.role === "super_admin" && (
+                <div className="space-y-2 pt-2 border-t" style={{ borderColor: "hsl(38 30% 15%)" }}>
+                  <Label className="text-zinc-400 text-xs uppercase tracking-wider">Add order codes or order numbers manually</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      value={manualCodes}
+                      onChange={e => setManualCodes(e.target.value)}
+                      placeholder="TGABC1234 or 482 — one per line or comma-separated"
+                      className="border-zinc-700/60 text-sm"
+                      style={{ background: "hsl(0 0% 7%)" }}
+                    />
+                    <button
+                      onClick={addManualEntries}
+                      disabled={syncingEntries}
+                      className="inline-flex items-center gap-1.5 text-xs font-bold px-3 rounded-lg border border-emerald-600/40 text-emerald-400 hover:bg-emerald-950/30 disabled:opacity-40"
+                    >
+                      <PlusCircle className="h-3.5 w-3.5" />Add
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-zinc-600">Order number can be the database order ID. Added entries can still be marked Sent before the draw.</p>
+                </div>
+              )}
             </div>
 
             {entries.length === 0 ? (

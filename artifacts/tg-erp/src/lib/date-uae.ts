@@ -41,3 +41,18 @@ export function isTodayUAE(iso: string | Date | null | undefined): boolean {
   const d = typeof iso === "string" ? new Date(iso) : iso;
   return d.toLocaleDateString("en-CA", { timeZone: UAE }) === todayUAE();
 }
+
+/**
+ * Returns true if the given timestamp falls on yesterday in UAE timezone.
+ * This is intentionally based on the UAE calendar date rather than the
+ * browser's local timezone so the lottery handoff remains stable at midnight.
+ */
+export function isYesterdayUAE(iso: string | Date | null | undefined): boolean {
+  if (!iso) return false;
+  const d = typeof iso === "string" ? new Date(iso) : iso;
+  // Use a UTC midnight date label for calendar arithmetic. Subtracting from
+  // a UAE-midnight instant would cross the UTC boundary and skip an extra day.
+  const yesterday = new Date(`${todayUAE()}T00:00:00Z`);
+  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+  return d.toLocaleDateString("en-CA", { timeZone: UAE }) === yesterday.toISOString().slice(0, 10);
+}

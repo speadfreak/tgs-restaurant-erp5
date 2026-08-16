@@ -175,7 +175,7 @@ router.post("/finance/entries", authenticate, requireRole(...FINANCE_ROLES), asy
 });
 
 router.patch("/finance/entries/:id", authenticate, requireRole(...FINANCE_ROLES), async (req, res): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
 
   const [current] = await db.select().from(financeEntriesTable).where(eq(financeEntriesTable.id, id));
@@ -207,11 +207,11 @@ router.patch("/finance/entries/:id", authenticate, requireRole(...FINANCE_ROLES)
   if (isAdmin && isLocked !== undefined) updates.isLocked = Boolean(isLocked);
 
   const [updated] = await db.update(financeEntriesTable).set(updates).where(eq(financeEntriesTable.id, id)).returning();
-  res.json({ id: updated.id, ...updated, amountAed: Number(updated.amountAed) });
+  res.json({ ...updated, amountAed: Number(updated.amountAed) });
 });
 
 router.delete("/finance/entries/:id", authenticate, requireRole(...FINANCE_ROLES), async (req, res): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
 
   const [current] = await db.select().from(financeEntriesTable).where(eq(financeEntriesTable.id, id));

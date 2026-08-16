@@ -20,12 +20,15 @@ import type {
 } from '@tanstack/react-query';
 
 import type {
+  AddManualLotteryEntries200,
   Alert,
   AuthResponse,
   Branch,
   BranchInput,
   BranchStat,
   BranchUpdate,
+  CancelDeliveryOrder200,
+  CancelDeliveryOrderInput,
   Commission,
   Customer,
   CustomerInput,
@@ -65,6 +68,8 @@ import type {
   LoginInput,
   LotteryDraw,
   LotteryDrawInput,
+  LotteryEntriesManualInput,
+  LotteryEntriesSyncInput,
   LotteryResult,
   LotteryWinner,
   MenuCategory,
@@ -80,6 +85,7 @@ import type {
   Payslip,
   PayslipInput,
   RevenueTrendPoint,
+  SyncLotteryEntries200,
   Timesheet,
   TimesheetInput,
   TimesheetUpdate,
@@ -2257,6 +2263,77 @@ export const useUpdateOrderStatus = <TError = ErrorType<unknown>,
         TContext
       > => {
       return useMutation(getUpdateOrderStatusMutationOptions(options));
+    }
+
+export const getCancelDeliveryOrderUrl = (id: number,) => {
+
+
+
+
+  return `/api/delivery/orders/${id}/cancel`
+}
+
+/**
+ * @summary Cancel a mistaken order submitted by a delivery rider
+ */
+export const cancelDeliveryOrder = async (id: number,
+    cancelDeliveryOrderInput?: CancelDeliveryOrderInput, options?: RequestInit): Promise<CancelDeliveryOrder200> => {
+
+  return customFetch<CancelDeliveryOrder200>(getCancelDeliveryOrderUrl(id),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(cancelDeliveryOrderInput)
+  }
+);}
+
+
+
+
+export const getCancelDeliveryOrderMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof cancelDeliveryOrder>>, TError,{id: number;data?: BodyType<CancelDeliveryOrderInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof cancelDeliveryOrder>>, TError,{id: number;data?: BodyType<CancelDeliveryOrderInput>}, TContext> => {
+
+const mutationKey = ['cancelDeliveryOrder'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof cancelDeliveryOrder>>, {id: number;data?: BodyType<CancelDeliveryOrderInput>}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  cancelDeliveryOrder(id,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CancelDeliveryOrderMutationResult = NonNullable<Awaited<ReturnType<typeof cancelDeliveryOrder>>>
+    export type CancelDeliveryOrderMutationBody = BodyType<CancelDeliveryOrderInput> | undefined
+    export type CancelDeliveryOrderMutationError = ErrorType<void>
+
+    /**
+ * @summary Cancel a mistaken order submitted by a delivery rider
+ */
+export const useCancelDeliveryOrder = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof cancelDeliveryOrder>>, TError,{id: number;data?: BodyType<CancelDeliveryOrderInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof cancelDeliveryOrder>>,
+        TError,
+        {id: number;data?: BodyType<CancelDeliveryOrderInput>},
+        TContext
+      > => {
+      return useMutation(getCancelDeliveryOrderMutationOptions(options));
     }
 
 export const getGetOrderByCodeUrl = (code: string,) => {
@@ -4620,6 +4697,146 @@ export const useCreateLotteryDraw = <TError = ErrorType<unknown>,
         TContext
       > => {
       return useMutation(getCreateLotteryDrawMutationOptions(options));
+    }
+
+export const getSyncLotteryEntriesUrl = () => {
+
+
+
+
+  return `/api/lottery/entries/sync`
+}
+
+/**
+ * @summary Reconcile all order entries into a lottery session
+ */
+export const syncLotteryEntries = async (lotteryEntriesSyncInput: LotteryEntriesSyncInput, options?: RequestInit): Promise<SyncLotteryEntries200> => {
+
+  return customFetch<SyncLotteryEntries200>(getSyncLotteryEntriesUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(lotteryEntriesSyncInput)
+  }
+);}
+
+
+
+
+export const getSyncLotteryEntriesMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof syncLotteryEntries>>, TError,{data: BodyType<LotteryEntriesSyncInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof syncLotteryEntries>>, TError,{data: BodyType<LotteryEntriesSyncInput>}, TContext> => {
+
+const mutationKey = ['syncLotteryEntries'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof syncLotteryEntries>>, {data: BodyType<LotteryEntriesSyncInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  syncLotteryEntries(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type SyncLotteryEntriesMutationResult = NonNullable<Awaited<ReturnType<typeof syncLotteryEntries>>>
+    export type SyncLotteryEntriesMutationBody = BodyType<LotteryEntriesSyncInput>
+    export type SyncLotteryEntriesMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Reconcile all order entries into a lottery session
+ */
+export const useSyncLotteryEntries = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof syncLotteryEntries>>, TError,{data: BodyType<LotteryEntriesSyncInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof syncLotteryEntries>>,
+        TError,
+        {data: BodyType<LotteryEntriesSyncInput>},
+        TContext
+      > => {
+      return useMutation(getSyncLotteryEntriesMutationOptions(options));
+    }
+
+export const getAddManualLotteryEntriesUrl = () => {
+
+
+
+
+  return `/api/lottery/entries/manual`
+}
+
+/**
+ * @summary Add order codes or order numbers to a lottery session
+ */
+export const addManualLotteryEntries = async (lotteryEntriesManualInput: LotteryEntriesManualInput, options?: RequestInit): Promise<AddManualLotteryEntries200> => {
+
+  return customFetch<AddManualLotteryEntries200>(getAddManualLotteryEntriesUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(lotteryEntriesManualInput)
+  }
+);}
+
+
+
+
+export const getAddManualLotteryEntriesMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof addManualLotteryEntries>>, TError,{data: BodyType<LotteryEntriesManualInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof addManualLotteryEntries>>, TError,{data: BodyType<LotteryEntriesManualInput>}, TContext> => {
+
+const mutationKey = ['addManualLotteryEntries'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof addManualLotteryEntries>>, {data: BodyType<LotteryEntriesManualInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  addManualLotteryEntries(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AddManualLotteryEntriesMutationResult = NonNullable<Awaited<ReturnType<typeof addManualLotteryEntries>>>
+    export type AddManualLotteryEntriesMutationBody = BodyType<LotteryEntriesManualInput>
+    export type AddManualLotteryEntriesMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Add order codes or order numbers to a lottery session
+ */
+export const useAddManualLotteryEntries = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof addManualLotteryEntries>>, TError,{data: BodyType<LotteryEntriesManualInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof addManualLotteryEntries>>,
+        TError,
+        {data: BodyType<LotteryEntriesManualInput>},
+        TContext
+      > => {
+      return useMutation(getAddManualLotteryEntriesMutationOptions(options));
     }
 
 export const getRunLotteryDrawUrl = (id: number,) => {

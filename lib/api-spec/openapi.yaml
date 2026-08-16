@@ -564,6 +564,41 @@ paths:
               schema:
                 $ref: "#/components/schemas/Order"
 
+  /delivery/orders/{id}/cancel:
+    post:
+      operationId: cancelDeliveryOrder
+      tags: [deliveries]
+      summary: Cancel a mistaken order submitted by a delivery rider
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelDeliveryOrderInput"
+      responses:
+        "200":
+          description: Order cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, orderId, status]
+                properties:
+                  ok:
+                    type: boolean
+                  orderId:
+                    type: integer
+                  status:
+                    type: string
+        "409":
+          description: Order can no longer be cancelled
+
   /orders/by-code/{code}:
     get:
       operationId: getOrderByCode
@@ -1206,6 +1241,44 @@ paths:
               schema:
                 $ref: "#/components/schemas/LotteryDraw"
 
+  /lottery/entries/sync:
+    post:
+      operationId: syncLotteryEntries
+      tags: [lottery]
+      summary: Reconcile all order entries into a lottery session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LotteryEntriesSyncInput"
+      responses:
+        "200":
+          description: Reconciliation result
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /lottery/entries/manual:
+    post:
+      operationId: addManualLotteryEntries
+      tags: [lottery]
+      summary: Add order codes or order numbers to a lottery session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LotteryEntriesManualInput"
+      responses:
+        "200":
+          description: Manual import result
+          content:
+            application/json:
+              schema:
+                type: object
+
   /lottery/draws/{id}/run:
     post:
       operationId: runLotteryDraw
@@ -1661,6 +1734,34 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/OrderItemInput"
+
+    CancelDeliveryOrderInput:
+      type: object
+      properties:
+        reason:
+          type: string
+
+    LotteryEntriesSyncInput:
+      type: object
+      required: [branchId]
+      properties:
+        branchId:
+          type: integer
+        drawDate:
+          type: string
+
+    LotteryEntriesManualInput:
+      type: object
+      required: [branchId, orderCodes]
+      properties:
+        branchId:
+          type: integer
+        drawDate:
+          type: string
+        orderCodes:
+          type: array
+          items:
+            type: string
 
     OrderUpdate:
       type: object

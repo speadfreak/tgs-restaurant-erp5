@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from './addManualLotteryEntries200';
 export * from './alert';
 export * from './alertSeverity';
 export * from './alertType';
@@ -14,6 +15,8 @@ export * from './branch';
 export * from './branchInput';
 export * from './branchStat';
 export * from './branchUpdate';
+export * from './cancelDeliveryOrder200';
+export * from './cancelDeliveryOrderInput';
 export * from './commission';
 export * from './customer';
 export * from './customerInput';
@@ -56,6 +59,8 @@ export * from './loginInput';
 export * from './lotteryDraw';
 export * from './lotteryDrawInput';
 export * from './lotteryDrawStatus';
+export * from './lotteryEntriesManualInput';
+export * from './lotteryEntriesSyncInput';
 export * from './lotteryResult';
 export * from './lotteryWinner';
 export * from './menuCategory';
@@ -77,6 +82,7 @@ export * from './orderUpdate';
 export * from './payslip';
 export * from './payslipInput';
 export * from './revenueTrendPoint';
+export * from './syncLotteryEntries200';
 export * from './timesheet';
 export * from './timesheetInput';
 export * from './timesheetUpdate';

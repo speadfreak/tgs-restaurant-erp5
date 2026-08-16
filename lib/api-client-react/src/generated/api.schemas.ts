@@ -245,6 +245,21 @@ export interface OrderInput {
   items: OrderItemInput[];
 }
 
+export interface CancelDeliveryOrderInput {
+  reason?: string;
+}
+
+export interface LotteryEntriesSyncInput {
+  branchId: number;
+  drawDate?: string;
+}
+
+export interface LotteryEntriesManualInput {
+  branchId: number;
+  drawDate?: string;
+  orderCodes: string[];
+}
+
 export interface OrderUpdate {
   paymentMethod?: string;
   /** @nullable */
@@ -639,6 +654,12 @@ status?: string;
 date?: string;
 };
 
+export type CancelDeliveryOrder200 = {
+  ok: boolean;
+  orderId: number;
+  status: string;
+};
+
 export type GetKitchenQueueParams = {
 branchId?: number;
 };
@@ -696,6 +717,10 @@ userId?: number;
 export type ListLotteryDrawsParams = {
 branchId?: number;
 };
+
+export type SyncLotteryEntries200 = { [key: string]: unknown };
+
+export type AddManualLotteryEntries200 = { [key: string]: unknown };
 
 export type GetDashboardSummaryParams = {
 branchId?: number;

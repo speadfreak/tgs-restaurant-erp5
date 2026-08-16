@@ -627,6 +627,24 @@ export const UpdateOrderStatusResponse = zod.object({
 
 
 /**
+ * @summary Cancel a mistaken order submitted by a delivery rider
+ */
+export const CancelDeliveryOrderParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CancelDeliveryOrderBody = zod.object({
+  "reason": zod.string().optional()
+})
+
+export const CancelDeliveryOrderResponse = zod.object({
+  "ok": zod.boolean(),
+  "orderId": zod.number(),
+  "status": zod.string()
+})
+
+
+/**
  * @summary Get order by code (customer tracking)
  */
 export const GetOrderByCodeParams = zod.object({
@@ -1318,6 +1336,33 @@ export const CreateLotteryDrawResponse = zod.object({
   "status": zod.enum(['scheduled', 'completed', 'cancelled']),
   "winnersCount": zod.number().nullish()
 })
+
+
+/**
+ * @summary Reconcile all order entries into a lottery session
+ */
+export const SyncLotteryEntriesBody = zod.object({
+  "branchId": zod.number(),
+  "drawDate": zod.string().optional()
+})
+
+export const SyncLotteryEntriesResponse = zod.object({
+
+}).passthrough()
+
+
+/**
+ * @summary Add order codes or order numbers to a lottery session
+ */
+export const AddManualLotteryEntriesBody = zod.object({
+  "branchId": zod.number(),
+  "drawDate": zod.string().optional(),
+  "orderCodes": zod.array(zod.string())
+})
+
+export const AddManualLotteryEntriesResponse = zod.object({
+
+}).passthrough()
 
 
 /**

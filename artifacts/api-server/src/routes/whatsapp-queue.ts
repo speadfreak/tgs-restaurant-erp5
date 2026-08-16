@@ -95,7 +95,7 @@ router.get("/whatsapp/queue", authenticate, requireRole(...QUEUE_ROLES), async (
 
 // Claim queue order
 router.post("/whatsapp/queue/:id/claim", authenticate, requireRole(...QUEUE_ROLES), async (req, res): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(String(req.params.id), 10);
   const { userId } = req.body;
   const [current] = await db.select().from(ordersTable).where(eq(ordersTable.id, id));
   if (!current) { res.status(404).json({ error: "Not found" }); return; }
@@ -110,7 +110,7 @@ router.post("/whatsapp/queue/:id/claim", authenticate, requireRole(...QUEUE_ROLE
 
 // Confirm queue order (transition to pending_acceptance)
 router.post("/whatsapp/queue/:id/confirm", authenticate, requireRole(...QUEUE_ROLES), async (req, res): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(String(req.params.id), 10);
   const { userId, customerName, deliveryAddress, items } = req.body;
   if (!items?.length) { res.status(400).json({ error: "Items required" }); return; }
   const [order] = await db.select().from(ordersTable).where(eq(ordersTable.id, id));
@@ -153,7 +153,7 @@ router.post("/whatsapp/queue/:id/confirm", authenticate, requireRole(...QUEUE_RO
 
 // Dismiss queue order
 router.post("/whatsapp/queue/:id/dismiss", authenticate, requireRole(...QUEUE_ROLES), async (req, res): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(String(req.params.id), 10);
   const { userId, reason } = req.body;
   if (!reason) { res.status(400).json({ error: "Reason required" }); return; }
   await db.update(ordersTable).set({ status: "dismissed" }).where(eq(ordersTable.id, id));

@@ -11,11 +11,11 @@ import { useToast } from "@/hooks/use-toast";
 import {
   Truck, Plus, Phone, MapPin, LogOut, Wifi, WifiOff,
   CheckCircle2, XCircle, Package, Bell, ExternalLink, BarChart2, Radio,
-  AlertCircle, Copy, Star,
+  AlertCircle, Copy, Star, Trash2, History,
 } from "lucide-react";
 import { MyTasks } from "@/components/my-tasks";
 import { getApiBase } from "@/lib/api-base";
-import { isTodayUAE } from "@/lib/date-uae";
+import { isTodayUAE, isYesterdayUAE } from "@/lib/date-uae";
 
 interface MenuItem {
   id: number; nameEn: string; nameAm: string; priceAed: number; available: boolean; categoryId: number; photoUrl?: string | null;
@@ -130,8 +130,9 @@ export default function DeliveryPortal() {
     try {
       const params = new URLSearchParams();
       if (user?.branchId) params.set("branchId", String(user.branchId));
-      // includeHistory=true so we get delivered/failed orders for the lucky number copy feature
+      // Keep yesterday's completed orders available for the lottery handoff.
       params.set("includeHistory", "true");
+      params.set("includeLotteryHistory", "true");
       const data: DeliveryOrder[] = await apiFetch(`/api/delivery/queue?${params}`);
       setOrders(data);
       // Filter to this rider's own deliveries completed today (UAE timezone = UTC+4)
@@ -180,8 +181,18 @@ export default function DeliveryPortal() {
       setActiveTab("deliveries");
       fetchOrders();
     });
-    socket.on("order:claimed", ({ orderId }: { orderId: number }) => {
-      setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: "assigned" } : o));
+    socket.on("order:claimed", ({ orderId, claimedByUserId }: { orderId: number; claimedByUserId: number }) => {
+      setOrders(prev => prev.flatMap(o => {
+        if (o.id !== orderId) return [o];
+        // A claim belongs to exactly one rider. Remove it from every other
+        // rider's local pool immediately instead of leaving stale state.
+        return claimedByUserId === user?.id
+          ? [{ ...o, status: "assigned", assignedDeliveryUserId: claimedByUserId }]
+          : [];
+      }));
+    });
+    socket.on("order:cancelled", ({ orderId }: { orderId: number }) => {
+      setOrders(prev => prev.filter(o => o.id !== orderId));
     });
     socket.on("order:status", ({ orderId, status }: { orderId: number; status: string }) => {
       setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status } : o));
@@ -190,6 +201,7 @@ export default function DeliveryPortal() {
       socket.off("order:ready_pool");
       socket.off("order:ready");
       socket.off("order:claimed");
+      socket.off("order:cancelled");
       socket.off("order:status");
     };
   }, [socket, toast, user?.id, fetchOrders]);
@@ -300,12 +312,34 @@ export default function DeliveryPortal() {
     setActionPending(p => ({ ...p, [id]: false }));
   };
 
+  const cancelRelayedOrder = async (id: number) => {
+    if (!window.confirm("Cancel this mistaken order? It will be removed from the kitchen and delivery queues.")) return;
+    setActionPending(p => ({ ...p, [id]: true }));
+    try {
+      await apiFetch(`/api/delivery/orders/${id}/cancel`, "POST", { reason: "Mistaken order submitted from delivery portal" });
+      setOrders(prev => prev.filter(o => o.id !== id));
+      toast({ title: "Order cancelled", description: "The mistaken order was removed from active queues." });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "";
+      toast({
+        title: "Could not cancel order",
+        description: msg.includes("409") ? "The kitchen has already started this order." : "Try again or contact a manager.",
+        variant: "destructive",
+      });
+    }
+    setActionPending(p => ({ ...p, [id]: false }));
+  };
+
   // Ready-but-unclaimed orders are a shared pool: EVERY deliveryman on the branch sees
   // every one of them — including ones they themselves relayed — so any available rider
   // can claim it. Nobody "owns" a ready order until they hit Claim.
   const readyToClaim = orders.filter(o => o.status === "ready" && !o.assignedDeliveryUserId);
   // Once claimed, the order belongs to that rider and moves into their own active list.
   const active = orders.filter(o => o.assignedDeliveryUserId === user?.id && ["assigned", "out_for_delivery"].includes(o.status));
+  const myRelayedOrders = orders.filter(o =>
+    o.relayedByUserId === user?.id &&
+    ["pending_acceptance", "pending", "confirmed"].includes(o.status)
+  );
   // History: orders this rider delivered, or relayed themselves (so they can see how their own relay turned out).
   // Use updatedAt (= last status-change time) as the delivery-completion timestamp
   // since createdAt is the order creation time, not when it was delivered.
@@ -314,6 +348,12 @@ export default function DeliveryPortal() {
     o.status === "delivered" &&
     (o.assignedDeliveryUserId === user?.id || o.relayedByUserId === user?.id) &&
     isTodayUAE(o.updatedAt ?? o.createdAt)
+  );
+  const yesterdayLottery = orders.filter(o =>
+    o.status === "delivered" &&
+    o.luckyNumber !== null &&
+    (o.assignedDeliveryUserId === user?.id || o.relayedByUserId === user?.id) &&
+    isYesterdayUAE(o.updatedAt ?? o.createdAt)
   );
 
   if (isLoading) return (
@@ -669,6 +709,40 @@ export default function DeliveryPortal() {
               </div>
             )}
 
+            {myRelayedOrders.length > 0 && (
+              <div className="space-y-2.5">
+                <h3 className="font-bold text-orange-400 flex items-center gap-2 text-sm">
+                  <AlertCircle className="h-4 w-4" />My Submitted Orders ({myRelayedOrders.length})
+                </h3>
+                <p className="text-xs text-zinc-600">Mistakes can be cancelled while the order is still waiting for kitchen confirmation.</p>
+                {myRelayedOrders.map(order => (
+                  <div key={order.id} className="queue-card" style={{ borderLeftColor: "hsl(25 85% 55%)" }}>
+                    <div className="flex justify-between items-start gap-3">
+                      <div>
+                        <div className="code-text text-lg text-orange-300">{order.orderCode}</div>
+                        <div className="text-sm text-zinc-300">{order.customerName}</div>
+                        <div className="text-xs text-zinc-500 mt-1">{order.items.map(i => `${i.quantity}× ${i.menuItemName}`).join(", ")}</div>
+                      </div>
+                      <div className="text-right">
+                        <StatusPill status={order.status} />
+                        <div className="text-xs text-amber-400 font-bold mt-1">{order.totalAed} AED</div>
+                      </div>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="w-full h-9 mt-3 text-xs font-bold border-orange-500/30 text-orange-300 hover:bg-orange-950/20"
+                      disabled={actionPending[order.id]}
+                      onClick={() => cancelRelayedOrder(order.id)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+                      {actionPending[order.id] ? "Cancelling..." : "Cancel Mistaken Order"}
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+
             {/* ── TODAY'S DELIVERED ORDERS (lucky number copy) ── */}
             {recentlyDelivered.length > 0 && (
               <div className="space-y-2.5">
@@ -718,7 +792,45 @@ export default function DeliveryPortal() {
               </div>
             )}
 
-            {readyToClaim.length === 0 && active.length === 0 && recentlyDelivered.length === 0 && (
+            {/* ── YESTERDAY'S LOTTERY HISTORY ── */}
+            {yesterdayLottery.length > 0 && (
+              <div className="space-y-2.5">
+                <h3 className="font-bold text-amber-400 flex items-center gap-2 text-sm">
+                  <History className="h-4 w-4" />Yesterday&apos;s Lottery History ({yesterdayLottery.length})
+                </h3>
+                <p className="text-xs text-zinc-600">These lucky numbers remain available after midnight so you can still send them today.</p>
+                {yesterdayLottery.map(order => {
+                  const message = `🎉 ስለደንበኝነትዎ እናመሰግናለን! | Thank You for Choosing Us!\n\n🎟️ የዕጣ ቁጥርዎ | Your Lucky Number: ${order.luckyNumber}\n\n📌 እባክዎ ቁጥሩን ይያዙት። | Please keep this number for our upcoming prize draw.`;
+                  return (
+                    <div key={order.id} className="queue-card" style={{ borderLeftColor: "hsl(38 88% 52%)" }}>
+                      <div className="flex items-center justify-between gap-3 mb-2">
+                        <div>
+                          <div className="code-text text-lg text-amber-400">{order.orderCode}</div>
+                          <div className="text-sm text-zinc-300">{order.customerName}</div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-xs text-zinc-500">Lucky number</div>
+                          <div className="code-text text-xl text-amber-400">#{order.luckyNumber}</div>
+                        </div>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="w-full h-8 text-xs font-bold border-amber-500/30 text-amber-400 hover:bg-amber-950/20"
+                        onClick={() => navigator.clipboard.writeText(message).then(
+                          () => toast({ title: "Lucky number message copied", description: `Ready to send for ${order.orderCode}` }),
+                          () => toast({ title: "Copy failed", description: "Use long-press to copy manually", variant: "destructive" }),
+                        )}
+                      >
+                        <Copy className="h-3 w-3 mr-1.5" />Copy Message for Customer
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {readyToClaim.length === 0 && active.length === 0 && myRelayedOrders.length === 0 && recentlyDelivered.length === 0 && yesterdayLottery.length === 0 && (
               loadingOrders ? (
                 <div className="text-center py-6 text-zinc-600 text-xs animate-pulse">Checking for orders...</div>
               ) : null

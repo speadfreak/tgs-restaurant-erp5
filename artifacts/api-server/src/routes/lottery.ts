@@ -8,6 +8,7 @@ import {
   lotteryWinnersTable,
   lotterySettingsTable,
   ordersTable,
+  customersTable,
 } from "@workspace/db";
 import { sendWhatsAppMessage } from "../lib/twilio";
 import { authenticate, requireRole, ADMIN_ROLES } from "../middlewares/auth";
@@ -21,6 +22,68 @@ function renderLuckyNumberMessage(template: string, luckyNumber: number, drawTim
   return template
     .replace(/\{\{lucky_number\}\}/g, String(luckyNumber))
     .replace(/\{\{draw_time\}\}/g, drawTime);
+}
+
+function uaeDate(date = new Date()): string {
+  return date.toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" });
+}
+
+function orderCreatedOnUaeDate(createdAt: Date, date: string): boolean {
+  return uaeDate(createdAt) === date;
+}
+
+async function createEntryForOrder(
+  order: typeof ordersTable.$inferSelect,
+  drawDate: string,
+): Promise<{ entry: typeof lotteryEntriesTable.$inferSelect | null; created: boolean; reason?: string }> {
+  if (order.status === "cancelled") return { entry: null, created: false, reason: "Order is cancelled" };
+
+  const existing = (await db.select().from(lotteryEntriesTable).where(
+    and(eq(lotteryEntriesTable.orderId, order.id), eq(lotteryEntriesTable.drawDate, drawDate))
+  ))[0];
+  if (existing) return { entry: existing, created: false, reason: "Already in session" };
+
+  const customer = order.customerId
+    ? (await db.select({ phone: customersTable.phone, name: customersTable.name }).from(customersTable).where(eq(customersTable.id, order.customerId)))[0]
+    : null;
+  const phone = order.customerPhoneDirect ?? customer?.phone ?? null;
+  if (!phone) return { entry: null, created: false, reason: "Order has no customer phone number" };
+
+  let luckyNumber = 0;
+  for (let attempt = 0; attempt < 20; attempt++) {
+    luckyNumber = Math.floor(100000 + Math.random() * 900000);
+    const collision = await db.select({ id: lotteryEntriesTable.id }).from(lotteryEntriesTable).where(
+      and(
+        eq(lotteryEntriesTable.branchId, order.branchId),
+        eq(lotteryEntriesTable.drawDate, drawDate),
+        eq(lotteryEntriesTable.luckyNumber, luckyNumber),
+      )
+    );
+    if (!collision.length) break;
+    if (attempt === 19) return { entry: null, created: false, reason: "Could not generate a unique lucky number" };
+  }
+
+  const [entry] = await db.insert(lotteryEntriesTable).values({
+    branchId: order.branchId,
+    orderId: order.id,
+    customerPhone: phone,
+    customerName: order.customerNameDirect ?? customer?.name ?? null,
+    luckyNumber,
+    drawDate,
+    luckyNumberSent: false,
+  }).returning();
+  return { entry, created: true };
+}
+
+async function syncLotteryEntries(branchId: number, drawDate: string) {
+  const orders = await db.select().from(ordersTable).where(eq(ordersTable.branchId, branchId));
+  const candidates = orders.filter(o => o.status !== "cancelled" && orderCreatedOnUaeDate(o.createdAt, drawDate));
+  const results = await Promise.all(candidates.map(order => createEntryForOrder(order, drawDate)));
+  return {
+    scanned: candidates.length,
+    created: results.filter(r => r.created).map(r => r.entry),
+    skipped: results.flatMap((r, index) => r.created ? [] : [{ reason: r.reason, orderId: candidates[index]?.id }]),
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -55,6 +118,78 @@ router.get("/lottery/entries", async (req, res): Promise<void> => {
   const orderCodeMap = new Map(orders.map(o => [o.id, o.orderCode]));
 
   res.json(rows.map(r => ({ ...r, orderCode: orderCodeMap.get(r.orderId) ?? null })));
+});
+
+// Reconcile all orders for a UAE calendar date into the lottery session. This
+// is safe to run repeatedly and repairs entries missed during order creation.
+router.post("/lottery/entries/sync", async (req, res): Promise<void> => {
+  const branchId = Number(req.body?.branchId);
+  const drawDate = typeof req.body?.drawDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.body.drawDate)
+    ? req.body.drawDate
+    : uaeDate();
+  if (!Number.isInteger(branchId) || branchId <= 0) {
+    res.status(400).json({ error: "branchId is required" });
+    return;
+  }
+
+  const result = await syncLotteryEntries(branchId, drawDate);
+  res.json({
+    branchId,
+    drawDate,
+    scanned: result.scanned,
+    created: result.created,
+    createdCount: result.created.length,
+    skipped: result.skipped,
+  });
+});
+
+// Super admins can add one or more order codes/IDs to a session when an
+// automatic reconciliation cannot identify an order.
+router.post("/lottery/entries/manual", async (req, res): Promise<void> => {
+  if (req.user?.role !== "super_admin") {
+    res.status(403).json({ error: "Only super admins can add manual lottery entries" });
+    return;
+  }
+
+  const branchId = Number(req.body?.branchId);
+  const drawDate = typeof req.body?.drawDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.body.drawDate)
+    ? req.body.drawDate
+    : uaeDate();
+  const rawCodes: unknown[] = Array.isArray(req.body?.orderCodes)
+    ? req.body.orderCodes
+    : [req.body?.orderCode ?? req.body?.orderNumber];
+  const codes = rawCodes
+    .flatMap((value: unknown) => String(value ?? "").split(/[,\n]/))
+    .map((value: string) => value.trim())
+    .filter(Boolean);
+
+  if (!Number.isInteger(branchId) || branchId <= 0) {
+    res.status(400).json({ error: "branchId is required" });
+    return;
+  }
+  if (!codes.length) {
+    res.status(400).json({ error: "Add at least one order code or order number" });
+    return;
+  }
+
+  const orders = await db.select().from(ordersTable).where(eq(ordersTable.branchId, branchId));
+  const added: unknown[] = [];
+  const existing: string[] = [];
+  const errors: Array<{ value: string; reason: string }> = [];
+
+  for (const value of [...new Set(codes)]) {
+    const order = orders.find(o => o.orderCode.toLowerCase() === value.toLowerCase() || String(o.id) === value);
+    if (!order) {
+      errors.push({ value, reason: "Order not found in this branch" });
+      continue;
+    }
+    const result = await createEntryForOrder(order, drawDate);
+    if (result.created && result.entry) added.push({ ...result.entry, orderCode: order.orderCode });
+    else if (result.reason === "Already in session") existing.push(order.orderCode);
+    else errors.push({ value, reason: result.reason ?? "Could not add order" });
+  }
+
+  res.json({ branchId, drawDate, added, addedCount: added.length, existing, errors });
 });
 
 // GET /lottery/entries/by-phone?phone= — public endpoint for customer lucky number lookup
@@ -126,7 +261,11 @@ router.get("/lottery/draws", async (req, res): Promise<void> => {
 router.post("/lottery/draws", async (req, res): Promise<void> => {
   const { branchId, drawDate, drawTime } = req.body;
   if (!branchId) { res.status(400).json({ error: "branchId required" }); return; }
-  const date = drawDate ?? new Date().toISOString().split("T")[0];
+  const date = drawDate ?? uaeDate();
+
+  // Always reconcile before creating a draw so a transient order-time
+  // failure cannot silently remove an order from the session.
+  await syncLotteryEntries(Number(branchId), date);
 
   // Count eligible entries for this date
   const entries = await db.select().from(lotteryEntriesTable).where(
@@ -158,8 +297,9 @@ router.post("/lottery/draws/:id/run", async (req, res): Promise<void> => {
   if (!draw) { res.status(404).json({ error: "Draw not found" }); return; }
   if (draw.status === "completed") { res.status(400).json({ error: "Draw already completed" }); return; }
 
-  // Fetch eligible entries: either sent via Twilio OR manually marked by admin
-  const entries = await db.select().from(lotteryEntriesTable).where(
+  // Fetch entries that were sent (via Twilio or manual confirmation). Also
+  // exclude cancelled orders so a stale entry can never win.
+  const candidateEntries = await db.select().from(lotteryEntriesTable).where(
     and(
       eq(lotteryEntriesTable.branchId, draw.branchId),
       eq(lotteryEntriesTable.drawDate, draw.drawDate),
@@ -169,6 +309,12 @@ router.post("/lottery/draws/:id/run", async (req, res): Promise<void> => {
       )
     )
   );
+  const candidateOrderIds = [...new Set(candidateEntries.map(entry => entry.orderId))];
+  const candidateOrders = candidateOrderIds.length
+    ? await db.select({ id: ordersTable.id, status: ordersTable.status }).from(ordersTable)
+    : [];
+  const cancelledOrderIds = new Set(candidateOrders.filter(order => order.status === "cancelled").map(order => order.id));
+  const entries = candidateEntries.filter(entry => !cancelledOrderIds.has(entry.orderId));
 
   if (entries.length === 0) {
     res.status(400).json({ error: "No eligible entries for this draw — mark at least one number as sent first" }); return;

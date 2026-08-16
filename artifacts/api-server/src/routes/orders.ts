@@ -156,9 +156,16 @@ router.post("/orders", authenticateOptional, async (req, res): Promise<void> => 
 
   // Lottery: generate lucky number immediately on order creation (no Twilio — admin copies manually)
   try {
-    const phone = order.customerPhoneDirect ?? null;
+    // Direct/relay orders normally carry the phone on the order itself, but
+    // web orders may reference a customer record instead. Do not silently
+    // skip those orders: the lottery reconciliation endpoint can repair old
+    // records, but new orders should enter the session immediately.
+    const linkedCustomer = order.customerId
+      ? (await db.select({ phone: customersTable.phone, name: customersTable.name }).from(customersTable).where(eq(customersTable.id, order.customerId)))[0]
+      : null;
+    const phone = order.customerPhoneDirect ?? linkedCustomer?.phone ?? null;
     if (phone) {
-      const today = new Date().toISOString().split("T")[0];
+      const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" });
       let luckyNumber = 0;
       let attempts = 0;
       do {
@@ -182,7 +189,7 @@ router.post("/orders", authenticateOptional, async (req, res): Promise<void> => 
           branchId: order.branchId,
           orderId: order.id,
           customerPhone: phone,
-          customerName: order.customerNameDirect ?? null,
+          customerName: order.customerNameDirect ?? linkedCustomer?.name ?? null,
           luckyNumber,
           drawDate: today,
           luckyNumberSent: false,
@@ -194,7 +201,7 @@ router.post("/orders", authenticateOptional, async (req, res): Promise<void> => 
           orderId: order.id,
           orderCode: order.orderCode,
           branchId: order.branchId,
-          customerName: order.customerNameDirect ?? null,
+          customerName: order.customerNameDirect ?? linkedCustomer?.name ?? null,
           customerPhone: phone,
           luckyNumber,
           drawDate: today,
@@ -385,26 +392,54 @@ router.get("/delivery/queue", authenticate, requireRole(...DELIVERY_ROLES), asyn
   const queryBranchId = req.query.branchId ? parseInt(req.query.branchId as string, 10) : null;
   const branchId = queryBranchId ?? req.user?.branchId ?? null;
   const includeHistory = req.query.includeHistory === "true";
+  const includeLotteryHistory = req.query.includeLotteryHistory === "true";
+  const isAdmin = ADMIN_ROLES.includes(req.user!.role);
 
   const activeStatuses = ["ready", "assigned", "out_for_delivery"];
-  const allStatuses = [...activeStatuses, "delivered", "failed"];
+  const relayStatuses = ["pending_acceptance", "pending", "confirmed"];
+  const allStatuses = [...activeStatuses, ...relayStatuses, "delivered", "failed"];
 
   let rows = await db.select().from(ordersTable).orderBy(desc(ordersTable.updatedAt));
-  rows = rows.filter(o => (includeHistory ? allStatuses : activeStatuses).includes(o.status));
+  rows = rows.filter(o => {
+    if ((includeHistory || includeLotteryHistory) && ["delivered", "failed"].includes(o.status)) return true;
+    if (activeStatuses.includes(o.status)) return true;
+    return relayStatuses.includes(o.status) && o.relayedByUserId === req.user!.id;
+  });
   if (branchId) rows = rows.filter(o => o.branchId === branchId);
 
-  // When returning history, limit delivered/failed orders to today in UAE time (UTC+4)
-  // so that stale orders from previous days never appear in delivery staff portals.
-  if (includeHistory) {
+  // Completed orders are intentionally bounded, but the lottery handoff keeps
+  // yesterday available so a rider can still send a message after midnight.
+  if (includeHistory || includeLotteryHistory) {
     const uaeTodayStr = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" });
     const startOfUAEToday = new Date(uaeTodayStr + "T00:00:00+04:00");
+    // Calculate the previous UAE calendar date from a UTC date label before
+    // converting it back to a UAE-midnight instant.
+    const yesterdayLabel = new Date(`${uaeTodayStr}T00:00:00Z`);
+    yesterdayLabel.setUTCDate(yesterdayLabel.getUTCDate() - 1);
+    const startOfYesterday = new Date(`${yesterdayLabel.toISOString().slice(0, 10)}T00:00:00+04:00`);
     rows = rows.filter(o => {
       if (o.status === "delivered" || o.status === "failed") {
         const ts = o.updatedAt ?? o.createdAt;
-        return ts ? new Date(ts) >= startOfUAEToday : false;
+        if (!ts) return false;
+        return includeLotteryHistory
+          ? new Date(ts) >= startOfYesterday
+          : new Date(ts) >= startOfUAEToday;
       }
       return true; // active orders (ready / assigned / out_for_delivery) always shown
     });
+  }
+
+  // Delivery staff must never receive another rider's assigned or completed
+  // orders from the API. The old UI filtered some of these locally, which
+  // still leaked them into realtime state and caused cross-portal confusion.
+  if (!isAdmin) {
+    rows = rows.filter(o =>
+      (o.status === "ready" && !o.assignedDeliveryUserId) ||
+      o.assignedDeliveryUserId === req.user!.id ||
+      (relayStatuses.includes(o.status) && o.relayedByUserId === req.user!.id) ||
+      (["delivered", "failed"].includes(o.status) &&
+        (o.assignedDeliveryUserId === req.user!.id || o.relayedByUserId === req.user!.id))
+    );
   }
 
   const nameMap = new Map<number, string>();
@@ -417,8 +452,12 @@ router.get("/delivery/queue", authenticate, requireRole(...DELIVERY_ROLES), asyn
 
   // Batch-fetch all items and lottery entries for the returned order set
   const [allItems, allLotteryEntries] = await Promise.all([
-    orderIds.length ? db.select().from(orderItemsTable) : Promise.resolve([]),
-    orderIds.length ? db.select({ orderId: lotteryEntriesTable.orderId, luckyNumber: lotteryEntriesTable.luckyNumber }).from(lotteryEntriesTable) : Promise.resolve([]),
+    orderIds.length
+      ? db.select().from(orderItemsTable)
+      : Promise.resolve([] as (typeof orderItemsTable.$inferSelect)[]),
+    orderIds.length
+      ? db.select({ orderId: lotteryEntriesTable.orderId, luckyNumber: lotteryEntriesTable.luckyNumber }).from(lotteryEntriesTable)
+      : Promise.resolve([] as Array<{ orderId: number; luckyNumber: number }>),
   ]);
   const itemsByOrder = new Map<number, typeof allItems>();
   for (const i of allItems) {
@@ -479,6 +518,59 @@ router.post("/delivery/orders/:id/claim", authenticate, requireRole(...DELIVERY_
   tryEmitTo(`branch:${order.branchId}:delivery`, "order:claimed", { orderId: order.id, claimedByUserId: userId });
   tryEmitTo(`branch:${order.branchId}:admin`, "order:status", { orderId: order.id, status: "assigned", orderCode: order.orderCode, branchId: order.branchId });
   res.json(result);
+});
+
+// Cancel a mistaken order submitted by a delivery rider through the relay
+// form. This is a soft delete: the audit trail remains intact, but the order
+// leaves kitchen/delivery queues and its unsent lottery entry is removed.
+router.post("/delivery/orders/:id/cancel", authenticate, requireRole(...DELIVERY_ROLES), async (req, res): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+
+  const userId = req.user!.id;
+  const isAdmin = ADMIN_ROLES.includes(req.user!.role);
+  const [current] = await db.select().from(ordersTable).where(eq(ordersTable.id, id));
+  if (!current) { res.status(404).json({ error: "Order not found" }); return; }
+
+  if (!isAdmin && current.relayedByUserId !== userId) {
+    res.status(403).json({ error: "You can only cancel orders you submitted" });
+    return;
+  }
+
+  const cancellableStatuses = ["pending_acceptance", "pending", "confirmed"];
+  if (!cancellableStatuses.includes(current.status)) {
+    res.status(409).json({ error: "This order can no longer be cancelled after kitchen preparation has started" });
+    return;
+  }
+
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.trim().slice(0, 250) : "";
+  const [order] = await db.update(ordersTable)
+    .set({ status: "cancelled", assignedDeliveryUserId: null, claimedAt: null })
+    .where(and(eq(ordersTable.id, id), eq(ordersTable.status, current.status)))
+    .returning();
+  if (!order) { res.status(409).json({ error: "Order changed before it could be cancelled" }); return; }
+
+  await db.insert(orderStatusHistoryTable).values({
+    orderId: order.id,
+    status: "cancelled",
+    changedBy: userId,
+    note: reason || "Cancelled from delivery portal",
+  });
+
+  // Cancelled orders should not remain eligible for a future draw. Entries
+  // belonging to an already completed draw are preserved for history.
+  await db.delete(lotteryEntriesTable).where(
+    and(eq(lotteryEntriesTable.orderId, order.id), eq(lotteryEntriesTable.isWinner, false))
+  );
+
+  tryEmitTo(`branch:${order.branchId}:delivery`, "order:cancelled", { orderId: order.id, orderCode: order.orderCode });
+  tryEmitTo(`branch:${order.branchId}:admin`, "order:status", {
+    orderId: order.id,
+    status: "cancelled",
+    orderCode: order.orderCode,
+    branchId: order.branchId,
+  });
+  res.json({ ok: true, orderId: order.id, status: order.status });
 });
 
 router.post("/delivery/orders/:id/pickup", authenticate, requireRole(...DELIVERY_ROLES), async (req, res): Promise<void> => {
