@@ -6,7 +6,7 @@ import {
   Trophy, Star, Clock, Sparkles, Loader2, RefreshCw,
   AlertCircle, CheckCircle, Send, ChevronDown, ChevronUp,
   Settings, Gift, RotateCcw, ShieldAlert, Copy, ClipboardCheck
-  , ClipboardList, PlusCircle
+  , ClipboardList, PlusCircle, Info
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -810,6 +810,20 @@ export default function LotteryPage() {
         {/* ── DRAW TAB ───────────────────────── */}
         {tab === "draw" && (
           <div className="space-y-6">
+            <div className="rounded-2xl border p-5" style={{ borderColor: "hsl(203 80% 45% / 0.35)", background: "hsl(203 45% 9% / 0.7)" }}>
+              <div className="flex items-start gap-3">
+                <Info className="h-5 w-5 text-sky-400 flex-shrink-0 mt-0.5" />
+                <div>
+                  <h3 className="text-sm font-bold text-sky-300">How fair selection works</h3>
+                  <p className="text-xs text-sky-100/65 mt-1.5 leading-relaxed">
+                    Winners are not chosen from a plain daily shuffle. For each prize, the system first gives priority to customers with the fewest previous wins. A customer who won the immediately previous draw is temporarily skipped when another eligible customer is available.
+                  </p>
+                  <p className="text-xs text-sky-100/65 mt-2 leading-relaxed">
+                    Each customer can receive only one prize per draw until every eligible customer has had a chance. Secure randomness breaks ties between customers with the same win history, so the process stays fair and unpredictable.
+                  </p>
+                </div>
+              </div>
+            </div>
             {/* Active draw status */}
             <div className="cinema-card rounded-2xl p-6">
               <div className="flex items-center justify-between mb-4">

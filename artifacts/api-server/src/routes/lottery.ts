@@ -12,6 +12,7 @@ import {
 } from "@workspace/db";
 import { sendWhatsAppMessage } from "../lib/twilio";
 import { authenticate, requireRole, ADMIN_ROLES } from "../middlewares/auth";
+import { loadLotteryWinnerHistory, selectFairWinners, uaeDate as getUaeDate } from "../lib/lottery-selection";
 
 const router: Router = Router();
 router.use("/lottery", authenticate, requireRole(...ADMIN_ROLES));
@@ -25,7 +26,7 @@ function renderLuckyNumberMessage(template: string, luckyNumber: number, drawTim
 }
 
 function uaeDate(date = new Date()): string {
-  return date.toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" });
+  return getUaeDate(date);
 }
 
 function orderCreatedOnUaeDate(createdAt: Date, date: string): boolean {
@@ -320,16 +321,10 @@ router.post("/lottery/draws/:id/run", async (req, res): Promise<void> => {
     res.status(400).json({ error: "No eligible entries for this draw — mark at least one number as sent first" }); return;
   }
 
-  // Generate crypto seed for reproducible randomness
+  // Generate a crypto seed. The fairness selector uses this seed to break
+  // ties while keeping the outcome auditable from the draw record.
   const seedBytes = crypto.randomBytes(32);
   const seed = seedBytes.toString("hex");
-
-  // Shuffle entries using seeded approach (Fisher-Yates with crypto bytes)
-  const shuffled = [...entries];
-  for (let i = shuffled.length - 1; i > 0; i--) {
-    const j = seedBytes[i % seedBytes.length] % (i + 1);
-    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-  }
 
   // Parse prize config
   let prizeConfig: Array<{ tier: string; count: number; prize: string }> = [];
@@ -338,6 +333,13 @@ router.post("/lottery/draws/:id/run", async (req, res): Promise<void> => {
   } catch {
     prizeConfig = [{ tier: "First Prize", count: 1, prize: "Free Meal" }];
   }
+
+  const totalPrizeSlots = prizeConfig.reduce(
+    (total, tier) => total + Math.max(0, Math.floor(Number(tier.count) || 0)),
+    0,
+  );
+  const history = await loadLotteryWinnerHistory(draw.branchId);
+  const selection = selectFairWinners(entries, history, totalPrizeSlots, seed);
 
   const [settings] = await db.select().from(lotterySettingsTable).where(
     eq(lotterySettingsTable.branchId, draw.branchId)
@@ -348,9 +350,10 @@ router.post("/lottery/draws/:id/run", async (req, res): Promise<void> => {
   let entryIndex = 0;
 
   for (const tier of prizeConfig) {
-    for (let i = 0; i < tier.count; i++) {
-      if (entryIndex >= shuffled.length) break;
-      const entry = shuffled[entryIndex++];
+    const tierCount = Math.max(0, Math.floor(Number(tier.count) || 0));
+    for (let i = 0; i < tierCount; i++) {
+      if (entryIndex >= selection.winners.length) break;
+      const entry = selection.winners[entryIndex++];
 
       const [winner] = await db.insert(lotteryWinnersTable).values({
         drawId: draw.id,
@@ -414,7 +417,13 @@ router.post("/lottery/draws/:id/run", async (req, res): Promise<void> => {
     totalEntries: entries.length,
   }).where(eq(lotteryDrawsTable.id, draw.id));
 
-  res.json({ drawId: draw.id, seed, totalEntries: entries.length, winners });
+  res.json({
+    drawId: draw.id,
+    seed,
+    totalEntries: entries.length,
+    winners,
+    selection: selection.summary,
+  });
 });
 
 // POST /lottery/draws/:id/reset — void a completed draw and reset to scheduled for a re-run

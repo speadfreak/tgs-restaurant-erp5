@@ -1,13 +1,15 @@
 import cron from "node-cron";
+import * as crypto from "crypto";
 import {
   db, cronJobLogsTable,
   lotteryEntriesTable, lotterySettingsTable, lotteryDrawsTable, lotteryWinnersTable,
   importShipmentsTable, ordersTable, branchesTable,
 } from "@workspace/db";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, or, sql } from "drizzle-orm";
 import { sendWhatsAppMessage } from "./twilio";
 import { getSetting } from "./settings";
 import { runWeeklyBackup } from "./weekly-backup";
+import { loadLotteryWinnerHistory, selectFairWinners, uaeDate } from "./lottery-selection";
 
 const DEFAULT_LUCKY_NUMBER_TEMPLATE = "🎉 ስለደንበኝነትዎ እናመሰግናለን! | Thank You for Choosing Us!\n\n🎟️ የዕጣ ቁጥርዎ | Your Lucky Number: {{lucky_number}}\n\n📌 እባክዎ ቁጥሩን ይያዙት። | Please keep this number for our upcoming prize draw.";
 
@@ -31,7 +33,7 @@ async function logJob(jobName: string, success: boolean, message: string) {
 // ── 1. DAILY LOTTERY DRAW ───────────────────────────────────────────────────
 // Runs at 18:00 UTC = 22:00 UAE (GMT+4)
 export async function runDailyLotteryDrawForBranch(branchId: number) {
-  const today = new Date().toISOString().split("T")[0];
+  const today = uaeDate();
   try {
     const [settings] = await db.select().from(lotterySettingsTable).where(eq(lotterySettingsTable.branchId, branchId));
     if (!settings?.autoRunEnabled) {
@@ -46,15 +48,40 @@ export async function runDailyLotteryDrawForBranch(branchId: number) {
       return;
     }
 
-    const entries = await db.select().from(lotteryEntriesTable)
-      .where(and(eq(lotteryEntriesTable.branchId, branchId), eq(lotteryEntriesTable.drawDate, today)));
+    const candidateEntries = await db.select().from(lotteryEntriesTable)
+      .where(and(
+        eq(lotteryEntriesTable.branchId, branchId),
+        eq(lotteryEntriesTable.drawDate, today),
+        or(
+          eq(lotteryEntriesTable.luckyNumberSent, true),
+          eq(lotteryEntriesTable.manuallySent, true),
+        ),
+      ));
+    const candidateOrderIds = [...new Set(candidateEntries.map(entry => entry.orderId))];
+    const candidateOrders = candidateOrderIds.length
+      ? await db.select({ id: ordersTable.id, status: ordersTable.status }).from(ordersTable)
+      : [];
+    const cancelledOrderIds = new Set(
+      candidateOrders.filter(order => order.status === "cancelled").map(order => order.id),
+    );
+    const entries = candidateEntries.filter(entry => !cancelledOrderIds.has(entry.orderId));
     if (entries.length === 0) {
       await logJob("daily_lottery_draw", true, `Branch ${branchId}: no entries`);
       return;
     }
 
     const prizeConfig: { tier: string; count: number; prize: string }[] = JSON.parse(settings.prizeConfig);
-    const shuffled = [...entries].sort(() => Math.random() - 0.5);
+    const seed = crypto.randomBytes(32).toString("hex");
+    const totalPrizeSlots = prizeConfig.reduce(
+      (total, tier) => total + Math.max(0, Math.floor(Number(tier.count) || 0)),
+      0,
+    );
+    const selection = selectFairWinners(
+      entries,
+      await loadLotteryWinnerHistory(branchId),
+      totalPrizeSlots,
+      seed,
+    );
 
     const [draw] = await db.insert(lotteryDrawsTable).values({
       branchId,
@@ -64,13 +91,14 @@ export async function runDailyLotteryDrawForBranch(branchId: number) {
       totalEntries: entries.length,
       prizeConfig: settings.prizeConfig,
       drawnAt: new Date(),
-      randomSeed: Math.random().toString(36).slice(2),
+      randomSeed: seed,
     }).returning();
 
     let entryIdx = 0;
     for (const tier of prizeConfig) {
-      for (let i = 0; i < tier.count && entryIdx < shuffled.length; i++, entryIdx++) {
-        const entry = shuffled[entryIdx];
+      const tierCount = Math.max(0, Math.floor(Number(tier.count) || 0));
+      for (let i = 0; i < tierCount && entryIdx < selection.winners.length; i++, entryIdx++) {
+        const entry = selection.winners[entryIdx];
         await db.insert(lotteryWinnersTable).values({
           drawId: draw.id,
           entryId: entry.id,
@@ -88,7 +116,11 @@ export async function runDailyLotteryDrawForBranch(branchId: number) {
         }
       }
     }
-    await logJob("daily_lottery_draw", true, `Branch ${branchId}: draw complete — ${entries.length} entries`);
+    await logJob(
+      "daily_lottery_draw",
+      true,
+      `Branch ${branchId}: draw complete — ${entries.length} entries; ${selection.summary.algorithmVersion}`,
+    );
   } catch (err) {
     await logJob("daily_lottery_draw", false, `Branch ${branchId}: ${String(err)}`);
   }
