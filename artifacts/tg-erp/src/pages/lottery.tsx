@@ -348,9 +348,12 @@ export default function LotteryPage() {
   };
 
   const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" });
-  // activeDraw = the most recent NON-completed draw (could be from a prior date if admin hasn't drawn yet)
-  const activeDraw = draws.find(d => d.status !== "completed") ?? null;
-  const sessionDate = activeDraw?.drawDate ?? (entries.length > 0 ? entries[entries.length - 1].drawDate : today);
+  // The working lottery session is always today's UAE session. Older draws
+  // belong in Winners History and must never become today's active draw.
+  const activeDraw = [...draws]
+    .filter(d => d.drawDate === today)
+    .sort((a, b) => b.id - a.id)[0] ?? null;
+  const sessionDate = today;
 
   useEffect(() => {
     if (user?.branchId) return; // already scoped to one branch, no picker needed
@@ -362,8 +365,9 @@ export default function LotteryPage() {
     setLoading(true);
     try {
       const [e, d, s] = await Promise.all([
-        // pendingOnly=true: returns ALL entries that don't have a completed draw yet (persists past midnight)
-        apiFetch(`/api/lottery/entries?branchId=${activeBranchId}&pendingOnly=true`),
+        // Keep the working screen scoped to today's UAE session. Historical
+        // entries are available through their draw history, not this list.
+        apiFetch(`/api/lottery/entries?branchId=${activeBranchId}&date=${today}&pendingOnly=true`),
         apiFetch(`/api/lottery/draws?branchId=${activeBranchId}`),
         apiFetch(`/api/lottery/settings/${activeBranchId}`),
       ]);
@@ -448,12 +452,10 @@ export default function LotteryPage() {
       toast({ title: "Select a branch first", variant: "destructive" });
       return;
     }
-    // Use the draw date of the oldest pending entry, or today if no pending entries
-    const drawDate = entries.length > 0 ? entries[entries.length - 1].drawDate : today;
     try {
       await apiFetch("/api/lottery/draws", "POST", {
         branchId: activeBranchId,
-        drawDate,
+        drawDate: today,
         drawTime: settings?.drawTime ?? "22:00",
         prizeConfig: settings?.prizeConfig ?? '[{"tier":"First Prize","count":1,"prize":"Free Meal"}]',
       });

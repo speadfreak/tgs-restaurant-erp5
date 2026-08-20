@@ -262,11 +262,33 @@ router.get("/lottery/draws", async (req, res): Promise<void> => {
 router.post("/lottery/draws", async (req, res): Promise<void> => {
   const { branchId, drawDate, drawTime } = req.body;
   if (!branchId) { res.status(400).json({ error: "branchId required" }); return; }
-  const date = drawDate ?? uaeDate();
+  const date = typeof drawDate === "string" ? drawDate : uaeDate();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    res.status(400).json({ error: "drawDate must use YYYY-MM-DD format" });
+    return;
+  }
+  if (date !== uaeDate()) {
+    res.status(400).json({ error: "Lottery draw sessions can only be created for today's UAE date" });
+    return;
+  }
 
-  // Always reconcile before creating a draw so a transient order-time
-  // failure cannot silently remove an order from the session.
+  // Always reconcile before checking for an existing session so today's
+  // orders are present even when the session was created earlier in the day.
   await syncLotteryEntries(Number(branchId), date);
+
+  const existingDraws = await db.select().from(lotteryDrawsTable).where(and(
+    eq(lotteryDrawsTable.branchId, Number(branchId)),
+    eq(lotteryDrawsTable.drawDate, date),
+  ));
+  const existingDraw = [...existingDraws].sort((a, b) => b.id - a.id)[0];
+  if (existingDraw?.status === "completed") {
+    res.status(409).json({ error: "Today's lottery draw is already completed", draw: existingDraw });
+    return;
+  }
+  if (existingDraw) {
+    res.json(existingDraw);
+    return;
+  }
 
   // Count eligible entries for this date
   const entries = await db.select().from(lotteryEntriesTable).where(
