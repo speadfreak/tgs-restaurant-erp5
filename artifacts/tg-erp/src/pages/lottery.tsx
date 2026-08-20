@@ -457,7 +457,8 @@ export default function LotteryPage() {
     try {
       await apiFetch("/api/lottery/draws", "POST", {
         branchId: activeBranchId,
-        drawDate: today,
+        drawDate: sessionDate,
+        allowPastDraw: sessionDate < today,
         drawTime: settings?.drawTime ?? "22:00",
         prizeConfig: settings?.prizeConfig ?? '[{"tier":"First Prize","count":1,"prize":"Free Meal"}]',
       });
@@ -659,7 +660,10 @@ export default function LotteryPage() {
               </div>
               <div>
                 <h1 className="cinema-title text-2xl">Lottery Engine</h1>
-                <p className="cinema-subtitle">Manual Lucky Number Panel · {today}</p>
+                <p className="cinema-subtitle">
+                  Manual Lucky Number Panel · {sessionDate}
+                  {sessionDate !== today && <span className="text-orange-400 ml-2">Recovery mode</span>}
+                </p>
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -701,6 +705,22 @@ export default function LotteryPage() {
         {/* ── TODAY'S LUCKY NUMBERS TAB ──────── */}
         {tab === "live" && (
           <div className="space-y-4">
+            <div className="flex items-center justify-between gap-3 rounded-xl border p-3" style={{ borderColor: "hsl(38 30% 15%)", background: "hsl(38 30% 6%)" }}>
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wider text-zinc-400">Lottery session date</p>
+                <p className="text-[11px] text-zinc-600 mt-0.5">
+                  Today is selected by default. Choose an older date only to recover a missed draw.
+                </p>
+              </div>
+              <Input
+                type="date"
+                value={sessionDate}
+                max={today}
+                onChange={e => setSessionDate(e.target.value || today)}
+                className="w-40 border-zinc-700/60 text-sm"
+                style={{ background: "hsl(0 0% 7%)" }}
+              />
+            </div>
             {/* Instruction banner */}
             <div className="rounded-xl border border-amber-700/40 bg-amber-950/20 p-4 flex items-start gap-3">
               <Send className="h-4 w-4 text-amber-400 flex-shrink-0 mt-0.5" />
@@ -753,7 +773,7 @@ export default function LotteryPage() {
             {entries.length === 0 ? (
               <div className="rounded-2xl border border-dashed p-12 text-center" style={{ borderColor: "hsl(0 0% 14%)" }}>
                 <Trophy className="h-10 w-10 mx-auto mb-3 text-zinc-700" />
-                <p className="text-zinc-500">No lucky numbers issued yet today</p>
+                <p className="text-zinc-500">No lucky numbers issued for {sessionDate}</p>
                 <p className="text-zinc-700 text-xs mt-1">Numbers are generated automatically when new orders are created</p>
               </div>
             ) : (
