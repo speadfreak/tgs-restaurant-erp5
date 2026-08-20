@@ -32,19 +32,19 @@ modules = ["nodejs-20", "web", "bash"]
     SETTINGS_ENCRYPTION_KEY = "2f9940af832000c7b25a0302ad84c69a"
     NEON_DATABASE_URL = "postgresql://postgres.xhkprxbclarjybppfmkj:sXeCzmiwkz9teMRV@aws-0-eu-west-1.pooler.supabase.com:6543/postgres"
 
-    [[ports]]
-    localPort = 8080
-    externalPort = 8080
+[[ports]]
+localPort = 8080
+externalPort = 8080
 
-    [[ports]]
-    localPort = 8081
-    externalPort = 80
+[[ports]]
+localPort = 8081
+externalPort = 80
 
-    [[ports]]
-    localPort = 25390
-    externalPort = 3000
+[[ports]]
+localPort = 25390
+externalPort = 3000
 
-    [[ports]]
-    localPort = 25391
-    externalPort = 3001
+[[ports]]
+localPort = 25391
+externalPort = 3001
     
