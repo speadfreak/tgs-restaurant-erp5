@@ -260,14 +260,19 @@ router.get("/lottery/draws", async (req, res): Promise<void> => {
 
 // POST /lottery/draws — create draw for today
 router.post("/lottery/draws", async (req, res): Promise<void> => {
-  const { branchId, drawDate, drawTime } = req.body;
+  const { branchId, drawDate, drawTime, allowPastDraw } = req.body;
   if (!branchId) { res.status(400).json({ error: "branchId required" }); return; }
   const date = typeof drawDate === "string" ? drawDate : uaeDate();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     res.status(400).json({ error: "drawDate must use YYYY-MM-DD format" });
     return;
   }
-  if (date !== uaeDate()) {
+  const today = uaeDate();
+  if (date > today) {
+    res.status(400).json({ error: "Lottery draw sessions cannot be created for a future date" });
+    return;
+  }
+  if (date !== today && allowPastDraw !== true) {
     res.status(400).json({ error: "Lottery draw sessions can only be created for today's UAE date" });
     return;
   }

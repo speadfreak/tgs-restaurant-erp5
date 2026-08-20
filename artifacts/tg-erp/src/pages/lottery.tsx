@@ -292,6 +292,9 @@ export default function LotteryPage() {
   const [loadingWinners, setLoadingWinners] = useState(false);
   const [manualCodes, setManualCodes] = useState("");
   const [syncingEntries, setSyncingEntries] = useState(false);
+  const [sessionDate, setSessionDate] = useState(
+    () => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" }),
+  );
 
   const totalConfiguredWinners = prizeTiers.reduce((sum, t) => sum + (t.count || 0), 0);
 
@@ -348,12 +351,11 @@ export default function LotteryPage() {
   };
 
   const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" });
-  // The working lottery session is always today's UAE session. Older draws
-  // belong in Winners History and must never become today's active draw.
+  // Today is selected by default. An older date is an explicit recovery
+  // session and remains separate from today's lottery.
   const activeDraw = [...draws]
-    .filter(d => d.drawDate === today)
+    .filter(d => d.drawDate === sessionDate)
     .sort((a, b) => b.id - a.id)[0] ?? null;
-  const sessionDate = today;
 
   useEffect(() => {
     if (user?.branchId) return; // already scoped to one branch, no picker needed
@@ -365,9 +367,9 @@ export default function LotteryPage() {
     setLoading(true);
     try {
       const [e, d, s] = await Promise.all([
-        // Keep the working screen scoped to today's UAE session. Historical
-        // entries are available through their draw history, not this list.
-        apiFetch(`/api/lottery/entries?branchId=${activeBranchId}&date=${today}&pendingOnly=true`),
+        // Today is loaded by default; a past date is loaded only when the
+        // admin explicitly chooses recovery mode.
+        apiFetch(`/api/lottery/entries?branchId=${activeBranchId}&date=${sessionDate}&pendingOnly=${sessionDate === today}`),
         apiFetch(`/api/lottery/draws?branchId=${activeBranchId}`),
         apiFetch(`/api/lottery/settings/${activeBranchId}`),
       ]);
@@ -380,7 +382,7 @@ export default function LotteryPage() {
       }
     } catch { /* ignore */ }
     setLoading(false);
-  }, [activeBranchId, today]);
+  }, [activeBranchId, sessionDate, today]);
 
   useEffect(() => { fetchAll(); const iv = setInterval(fetchAll, 20000); return () => clearInterval(iv); }, [fetchAll]);
 
