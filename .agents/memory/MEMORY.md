@@ -7,3 +7,4 @@
 - [Finance entries auth](finance-entries-auth.md) — finance_staff with null branchId must be 403'd; branch scope is enforced server-side not via query params.
 - [Express 5 OPTIONS wildcard](express5-options.md) — app.options('*', cors()) works in Express 5.2.1 without issue; seed: tables without unique constraints need existence checks, not bare onConflictDoNothing.
 - [Express router mount-order role gate bug](express-router-path-scoping.md) — router.use(authenticate, requireRole(...)) with no path arg leaks its gate onto later-mounted sibling routers.
+- [GitHub publish fallback](github-publish-fallback.md) — when shell git push lacks credentials, a connected GitHub integration can safely fast-forward main through the Git data API.
