@@ -29,6 +29,7 @@ import type {
   BranchUpdate,
   CancelDeliveryOrder200,
   CancelDeliveryOrderInput,
+  CleanupFinanceInput,
   Commission,
   Customer,
   CustomerInput,
@@ -39,6 +40,8 @@ import type {
   DeliveryUpdate,
   Expense,
   ExpenseInput,
+  FinanceCleanupPreview,
+  FinanceCleanupResponse,
   FinanceSummary,
   GetDashboardAlertsParams,
   GetDashboardSummaryParams,
@@ -84,6 +87,7 @@ import type {
   OrderUpdate,
   Payslip,
   PayslipInput,
+  PreviewFinanceCleanupParams,
   RevenueTrendPoint,
   SyncLotteryEntries200,
   Timesheet,
@@ -3632,6 +3636,160 @@ export function useGetRevenueTrend<TData = Awaited<ReturnType<typeof getRevenueT
 
 
 
+
+export const getPreviewFinanceCleanupUrl = (params: PreviewFinanceCleanupParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/finance/cleanup/preview?${stringifiedParams}` : `/api/finance/cleanup/preview`
+}
+
+/**
+ * @summary Preview finance records eligible for permanent deletion
+ */
+export const previewFinanceCleanup = async (params: PreviewFinanceCleanupParams, options?: RequestInit): Promise<FinanceCleanupPreview> => {
+
+  return customFetch<FinanceCleanupPreview>(getPreviewFinanceCleanupUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getPreviewFinanceCleanupQueryKey = (params?: PreviewFinanceCleanupParams,) => {
+    return [
+    `/api/finance/cleanup/preview`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getPreviewFinanceCleanupQueryOptions = <TData = Awaited<ReturnType<typeof previewFinanceCleanup>>, TError = ErrorType<unknown>>(params: PreviewFinanceCleanupParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof previewFinanceCleanup>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getPreviewFinanceCleanupQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof previewFinanceCleanup>>> = ({ signal }) => previewFinanceCleanup(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof previewFinanceCleanup>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type PreviewFinanceCleanupQueryResult = NonNullable<Awaited<ReturnType<typeof previewFinanceCleanup>>>
+export type PreviewFinanceCleanupQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Preview finance records eligible for permanent deletion
+ */
+
+export function usePreviewFinanceCleanup<TData = Awaited<ReturnType<typeof previewFinanceCleanup>>, TError = ErrorType<unknown>>(
+ params: PreviewFinanceCleanupParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof previewFinanceCleanup>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getPreviewFinanceCleanupQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getCleanupFinanceUrl = () => {
+
+
+
+
+  return `/api/finance/cleanup`
+}
+
+/**
+ * @summary Permanently delete finance records in a confirmed time range
+ */
+export const cleanupFinance = async (cleanupFinanceInput: CleanupFinanceInput, options?: RequestInit): Promise<FinanceCleanupResponse> => {
+
+  return customFetch<FinanceCleanupResponse>(getCleanupFinanceUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(cleanupFinanceInput)
+  }
+);}
+
+
+
+
+export const getCleanupFinanceMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof cleanupFinance>>, TError,{data: BodyType<CleanupFinanceInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof cleanupFinance>>, TError,{data: BodyType<CleanupFinanceInput>}, TContext> => {
+
+const mutationKey = ['cleanupFinance'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof cleanupFinance>>, {data: BodyType<CleanupFinanceInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  cleanupFinance(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CleanupFinanceMutationResult = NonNullable<Awaited<ReturnType<typeof cleanupFinance>>>
+    export type CleanupFinanceMutationBody = BodyType<CleanupFinanceInput>
+    export type CleanupFinanceMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Permanently delete finance records in a confirmed time range
+ */
+export const useCleanupFinance = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof cleanupFinance>>, TError,{data: BodyType<CleanupFinanceInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof cleanupFinance>>,
+        TError,
+        {data: BodyType<CleanupFinanceInput>},
+        TContext
+      > => {
+      return useMutation(getCleanupFinanceMutationOptions(options));
+    }
 
 export const getListInventoryItemsUrl = (params?: ListInventoryItemsParams,) => {
   const normalizedParams = new URLSearchParams();

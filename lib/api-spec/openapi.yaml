@@ -958,6 +958,51 @@ paths:
                 items:
                   $ref: "#/components/schemas/RevenueTrendPoint"
 
+  /finance/cleanup/preview:
+    get:
+      operationId: previewFinanceCleanup
+      tags: [finance]
+      summary: Preview finance records eligible for permanent deletion
+      parameters:
+        - name: from
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: Finance cleanup preview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FinanceCleanupPreview"
+
+  /finance/cleanup:
+    post:
+      operationId: cleanupFinance
+      tags: [finance]
+      summary: Permanently delete finance records in a confirmed time range
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CleanupFinanceInput"
+      responses:
+        "200":
+          description: Finance records deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FinanceCleanupResponse"
+
   # ─── INVENTORY ────────────────────────────────────────────
   /inventory:
     get:
@@ -1968,6 +2013,96 @@ components:
           type: number
         orderCount:
           type: integer
+
+    FinanceCleanupDataset:
+      type: object
+      required: [count, totalAed]
+      properties:
+        count:
+          type: integer
+        totalAed:
+          type: number
+
+    FinanceEntryCleanupDataset:
+      type: object
+      required: [count, totalAed, lockedCount, lockedAmountAed]
+      properties:
+        count:
+          type: integer
+        totalAed:
+          type: number
+        lockedCount:
+          type: integer
+          description: Locked entries in the range included in the deletion
+        lockedAmountAed:
+          type: number
+          description: Amount represented by locked entries in the range
+
+    FinanceCleanupPreview:
+      type: object
+      required: [from, to, revenue, financeEntries, expenses, commissions, totalCount, totalAmountAed]
+      properties:
+        from:
+          type: string
+        to:
+          type: string
+        revenue:
+          $ref: "#/components/schemas/RevenueCleanupDataset"
+        financeEntries:
+          $ref: "#/components/schemas/FinanceEntryCleanupDataset"
+        expenses:
+          $ref: "#/components/schemas/FinanceCleanupDataset"
+        commissions:
+          $ref: "#/components/schemas/FinanceCleanupDataset"
+        totalCount:
+          type: integer
+        totalAmountAed:
+          type: number
+
+    RevenueCleanupDataset:
+      type: object
+      required: [count, totalAed, relatedCount]
+      properties:
+        count:
+          type: integer
+          description: Revenue orders in the range
+        totalAed:
+          type: number
+          description: Revenue total represented by those orders
+        relatedCount:
+          type: integer
+          description: Linked order items, deliveries, status records, lottery records, and WhatsApp records also deleted
+
+    CleanupFinanceInput:
+      type: object
+      required: [from, to, confirm]
+      properties:
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        confirm:
+          type: boolean
+          description: Must be true to authorize permanent deletion
+
+    FinanceCleanupResponse:
+      type: object
+      required: [ok, from, to, deleted, lockedFinanceEntriesCount, deletedAt]
+      properties:
+        ok:
+          type: boolean
+        from:
+          type: string
+        to:
+          type: string
+        deleted:
+          $ref: "#/components/schemas/FinanceCleanupPreview"
+        lockedFinanceEntriesCount:
+          type: integer
+        deletedAt:
+          type: string
 
     # INVENTORY
     InventoryItem:

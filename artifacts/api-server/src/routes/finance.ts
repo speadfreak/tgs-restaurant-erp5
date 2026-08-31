@@ -1,6 +1,21 @@
 import { Router } from "express";
-import { eq, and, gte } from "drizzle-orm";
-import { db, expensesTable, ordersTable, commissionsTable, usersTable, settingsTable, financeEntriesTable, branchesTable } from "@workspace/db";
+import { eq, and, gte, lte, inArray, or } from "drizzle-orm";
+import {
+  db,
+  expensesTable,
+  ordersTable,
+  orderItemsTable,
+  orderStatusHistoryTable,
+  deliveriesTable,
+  commissionsTable,
+  usersTable,
+  settingsTable,
+  financeEntriesTable,
+  branchesTable,
+  lotteryEntriesTable,
+  lotteryWinnersTable,
+  whatsappMessagesTable,
+} from "@workspace/db";
 import {
   ListExpensesQueryParams,
   ListExpensesResponse,
@@ -11,6 +26,10 @@ import {
   GetFinanceSummaryResponse,
   GetRevenueTrendQueryParams,
   GetRevenueTrendResponse,
+  PreviewFinanceCleanupQueryParams,
+  PreviewFinanceCleanupResponse,
+  CleanupFinanceBody,
+  CleanupFinanceResponse,
 } from "@workspace/api-zod";
 import { authenticate, requireRole, ADMIN_ROLES, FINANCE_ROLES } from "../middlewares/auth";
 
@@ -364,6 +383,266 @@ router.get("/finance/revenue-trend", async (req, res): Promise<void> => {
   }
   const trend = Array.from(dateMap.entries()).map(([date, v]) => ({ date, ...v }));
   res.json(GetRevenueTrendResponse.parse(trend));
+});
+
+// ── FINANCE CLEANUP ───────────────────────────────────────────────────────────
+// This operates on revenue and finance records only. Customer, menu, staff,
+// branch, and other unrelated reference data are never part of this cleanup.
+type CleanupRange = { from: Date; to: Date };
+
+function parseCleanupRange(input: { from: string | Date; to: string | Date }): CleanupRange | string {
+  const from = input.from instanceof Date ? input.from : new Date(input.from);
+  const to = input.to instanceof Date ? input.to : new Date(input.to);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+    return "from and to must be valid date-time values";
+  }
+  if (from >= to) {
+    return "from must be earlier than to";
+  }
+  return { from, to };
+}
+
+function inCleanupRange(createdAt: Date, range: CleanupRange): boolean {
+  return createdAt >= range.from && createdAt <= range.to;
+}
+
+function totalAmount(rows: Array<{ amountAed: string | number }>): number {
+  return rows.reduce((sum, row) => sum + Number(row.amountAed), 0);
+}
+
+function buildCleanupPreview(
+  range: CleanupRange,
+  financeEntries: Array<{ createdAt: Date; isLocked: boolean; amountAed: string }>,
+  expenses: Array<{ createdAt: Date; amountAed: string }>,
+  commissions: Array<{ createdAt: Date; amountAed: string; orderId: number }>,
+  orders: Array<{ id: number; createdAt: Date; totalAed: string }>,
+  orderItems: Array<{ orderId: number }>,
+  orderStatusHistory: Array<{ orderId: number }>,
+  deliveries: Array<{ orderId: number }>,
+  lotteryEntries: Array<{ id: number; orderId: number }>,
+  lotteryWinners: Array<{ entryId: number }>,
+  whatsappMessages: Array<{ orderId: number | null }>,
+) {
+  const entriesInRange = financeEntries.filter((entry) => inCleanupRange(entry.createdAt, range));
+  const expensesInRange = expenses.filter((expense) => inCleanupRange(expense.createdAt, range));
+  const ordersInRange = orders.filter((order) => inCleanupRange(order.createdAt, range));
+  const orderIds = new Set(ordersInRange.map((order) => order.id));
+  const commissionsInRange = commissions.filter((commission) => inCleanupRange(commission.createdAt, range) || orderIds.has(commission.orderId));
+  const lotteryEntryIds = new Set(lotteryEntries.filter((entry) => orderIds.has(entry.orderId)).map((entry) => entry.id));
+  const relatedCount =
+    orderItems.filter((row) => orderIds.has(row.orderId)).length +
+    orderStatusHistory.filter((row) => orderIds.has(row.orderId)).length +
+    deliveries.filter((row) => orderIds.has(row.orderId)).length +
+    lotteryEntryIds.size +
+    lotteryWinners.filter((row) => lotteryEntryIds.has(row.entryId)).length +
+    whatsappMessages.filter((row) => row.orderId !== null && orderIds.has(row.orderId)).length;
+  const financeEntriesSummary = {
+    count: entriesInRange.length,
+    totalAed: totalAmount(entriesInRange),
+    lockedCount: entriesInRange.filter((entry) => entry.isLocked).length,
+    lockedAmountAed: totalAmount(entriesInRange.filter((entry) => entry.isLocked)),
+  };
+  const expenseSummary = { count: expensesInRange.length, totalAed: totalAmount(expensesInRange) };
+  const commissionSummary = { count: commissionsInRange.length, totalAed: totalAmount(commissionsInRange) };
+  const revenueSummary = {
+    count: ordersInRange.length,
+    totalAed: totalAmount(ordersInRange.map((order) => ({ amountAed: order.totalAed }))),
+    relatedCount,
+  };
+
+  return {
+    from: range.from.toISOString(),
+    to: range.to.toISOString(),
+    revenue: revenueSummary,
+    financeEntries: financeEntriesSummary,
+    expenses: expenseSummary,
+    commissions: commissionSummary,
+    totalCount: revenueSummary.count + revenueSummary.relatedCount + financeEntriesSummary.count + expenseSummary.count + commissionSummary.count,
+    totalAmountAed: revenueSummary.totalAed + financeEntriesSummary.totalAed + expenseSummary.totalAed + commissionSummary.totalAed,
+  };
+}
+
+router.get("/finance/cleanup/preview", async (req, res): Promise<void> => {
+  const parsed = PreviewFinanceCleanupQueryParams.safeParse({
+    from: new Date(String(req.query.from ?? "")),
+    to: new Date(String(req.query.to ?? "")),
+  });
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+  const range = parseCleanupRange(parsed.data);
+  if (typeof range === "string") {
+    res.status(400).json({ error: range });
+    return;
+  }
+
+  const [financeEntries, expenses, commissions, orders, orderItems, orderStatusHistory, deliveries, lotteryEntries, lotteryWinners, whatsappMessages] = await Promise.all([
+    db.select({
+      createdAt: financeEntriesTable.createdAt,
+      isLocked: financeEntriesTable.isLocked,
+      amountAed: financeEntriesTable.amountAed,
+    }).from(financeEntriesTable),
+    db.select({ createdAt: expensesTable.createdAt, amountAed: expensesTable.amountAed }).from(expensesTable),
+    db.select({ createdAt: commissionsTable.createdAt, amountAed: commissionsTable.amountAed, orderId: commissionsTable.orderId }).from(commissionsTable),
+    db.select({ id: ordersTable.id, createdAt: ordersTable.createdAt, totalAed: ordersTable.totalAed }).from(ordersTable),
+    db.select({ orderId: orderItemsTable.orderId }).from(orderItemsTable),
+    db.select({ orderId: orderStatusHistoryTable.orderId }).from(orderStatusHistoryTable),
+    db.select({ orderId: deliveriesTable.orderId }).from(deliveriesTable),
+    db.select({ id: lotteryEntriesTable.id, orderId: lotteryEntriesTable.orderId }).from(lotteryEntriesTable),
+    db.select({ entryId: lotteryWinnersTable.entryId }).from(lotteryWinnersTable),
+    db.select({ orderId: whatsappMessagesTable.orderId }).from(whatsappMessagesTable),
+  ]);
+
+  res.json(PreviewFinanceCleanupResponse.parse(buildCleanupPreview(
+    range,
+    financeEntries,
+    expenses,
+    commissions,
+    orders,
+    orderItems,
+    orderStatusHistory,
+    deliveries,
+    lotteryEntries,
+    lotteryWinners,
+    whatsappMessages,
+  )));
+});
+
+router.post("/finance/cleanup", async (req, res): Promise<void> => {
+  const parsed = CleanupFinanceBody.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+  if (parsed.data.confirm !== true) {
+    res.status(400).json({ error: "Explicit confirmation is required before permanent deletion" });
+    return;
+  }
+  const range = parseCleanupRange(parsed.data);
+  if (typeof range === "string") {
+    res.status(400).json({ error: range });
+    return;
+  }
+
+  const deleted = await db.transaction(async (tx) => {
+    const ordersToDelete = await tx.select({
+      id: ordersTable.id,
+      totalAed: ordersTable.totalAed,
+    }).from(ordersTable).where(and(
+      gte(ordersTable.createdAt, range.from),
+      lte(ordersTable.createdAt, range.to),
+    ));
+    const orderIds = ordersToDelete.map((order) => order.id);
+    const lotteryEntriesToDelete = orderIds.length > 0
+      ? await tx.select({ id: lotteryEntriesTable.id })
+        .from(lotteryEntriesTable)
+        .where(inArray(lotteryEntriesTable.orderId, orderIds))
+      : [];
+    const lotteryEntryIds = lotteryEntriesToDelete.map((entry) => entry.id);
+
+    const whatsappMessagesDeleted = orderIds.length > 0
+      ? await tx.delete(whatsappMessagesTable)
+        .where(inArray(whatsappMessagesTable.orderId, orderIds))
+        .returning({ id: whatsappMessagesTable.id })
+      : [];
+    const lotteryWinnersDeleted = lotteryEntryIds.length > 0
+      ? await tx.delete(lotteryWinnersTable)
+        .where(inArray(lotteryWinnersTable.entryId, lotteryEntryIds))
+        .returning({ id: lotteryWinnersTable.id })
+      : [];
+    const lotteryEntriesDeleted = lotteryEntryIds.length > 0
+      ? await tx.delete(lotteryEntriesTable)
+        .where(inArray(lotteryEntriesTable.id, lotteryEntryIds))
+        .returning({ id: lotteryEntriesTable.id })
+      : [];
+    const commissionsCondition = orderIds.length > 0
+      ? or(
+        and(
+          gte(commissionsTable.createdAt, range.from),
+          lte(commissionsTable.createdAt, range.to),
+        ),
+        inArray(commissionsTable.orderId, orderIds),
+      )
+      : and(
+        gte(commissionsTable.createdAt, range.from),
+        lte(commissionsTable.createdAt, range.to),
+      );
+    const commissionsDeleted = await tx.delete(commissionsTable)
+      .where(commissionsCondition)
+      .returning({ amountAed: commissionsTable.amountAed });
+    const orderStatusHistoryDeleted = orderIds.length > 0
+      ? await tx.delete(orderStatusHistoryTable)
+        .where(inArray(orderStatusHistoryTable.orderId, orderIds))
+        .returning({ id: orderStatusHistoryTable.id })
+      : [];
+    const orderItemsDeleted = orderIds.length > 0
+      ? await tx.delete(orderItemsTable)
+        .where(inArray(orderItemsTable.orderId, orderIds))
+        .returning({ id: orderItemsTable.id })
+      : [];
+    const deliveriesDeleted = orderIds.length > 0
+      ? await tx.delete(deliveriesTable)
+        .where(inArray(deliveriesTable.orderId, orderIds))
+        .returning({ id: deliveriesTable.id })
+      : [];
+    const ordersDeleted = orderIds.length > 0
+      ? await tx.delete(ordersTable)
+        .where(inArray(ordersTable.id, orderIds))
+        .returning({ totalAed: ordersTable.totalAed })
+      : [];
+    const financeEntriesDeleted = await tx.delete(financeEntriesTable)
+      .where(and(
+        gte(financeEntriesTable.createdAt, range.from),
+        lte(financeEntriesTable.createdAt, range.to),
+      ))
+      .returning({ amountAed: financeEntriesTable.amountAed, isLocked: financeEntriesTable.isLocked });
+    const expensesDeleted = await tx.delete(expensesTable)
+      .where(and(
+        gte(expensesTable.createdAt, range.from),
+        lte(expensesTable.createdAt, range.to),
+      ))
+      .returning({ amountAed: expensesTable.amountAed });
+    const relatedCount = orderItemsDeleted.length +
+      orderStatusHistoryDeleted.length +
+      deliveriesDeleted.length +
+      lotteryEntriesDeleted.length +
+      lotteryWinnersDeleted.length +
+      whatsappMessagesDeleted.length;
+
+    return {
+      revenue: {
+        count: ordersDeleted.length,
+        totalAed: ordersDeleted.reduce((sum, order) => sum + Number(order.totalAed), 0),
+        relatedCount,
+      },
+      financeEntries: {
+        count: financeEntriesDeleted.length,
+        totalAed: totalAmount(financeEntriesDeleted),
+        lockedCount: financeEntriesDeleted.filter((entry) => entry.isLocked).length,
+        lockedAmountAed: totalAmount(financeEntriesDeleted.filter((entry) => entry.isLocked)),
+      },
+      expenses: { count: expensesDeleted.length, totalAed: totalAmount(expensesDeleted) },
+      commissions: { count: commissionsDeleted.length, totalAed: totalAmount(commissionsDeleted) },
+      totalCount: ordersDeleted.length + relatedCount + financeEntriesDeleted.length + expensesDeleted.length + commissionsDeleted.length,
+      totalAmountAed: ordersDeleted.reduce((sum, order) => sum + Number(order.totalAed), 0) + totalAmount(financeEntriesDeleted) + totalAmount(expensesDeleted) + totalAmount(commissionsDeleted),
+      lockedFinanceEntriesCount: financeEntriesDeleted.filter((entry) => entry.isLocked).length,
+    };
+  });
+
+  const response = {
+    ok: true,
+    from: range.from.toISOString(),
+    to: range.to.toISOString(),
+    deleted: {
+      from: range.from.toISOString(),
+      to: range.to.toISOString(),
+      ...deleted,
+    },
+    lockedFinanceEntriesCount: deleted.lockedFinanceEntriesCount,
+    deletedAt: new Date().toISOString(),
+  };
+  res.json(CleanupFinanceResponse.parse(response));
 });
 
 // ── COMMISSION RATES (PATCH — admin only, gate above applies) ───────────────

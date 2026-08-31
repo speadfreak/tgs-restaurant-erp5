@@ -422,6 +422,56 @@ export interface RevenueTrendPoint {
   orderCount: number;
 }
 
+export interface FinanceCleanupDataset {
+  count: number;
+  totalAed: number;
+}
+
+export interface FinanceEntryCleanupDataset {
+  count: number;
+  totalAed: number;
+  /** Locked entries in the range included in the deletion */
+  lockedCount: number;
+  /** Amount represented by locked entries in the range */
+  lockedAmountAed: number;
+}
+
+export interface RevenueCleanupDataset {
+  /** Revenue orders in the range */
+  count: number;
+  /** Revenue total represented by those orders */
+  totalAed: number;
+  /** Linked order items, deliveries, status records, lottery records, and WhatsApp records also deleted */
+  relatedCount: number;
+}
+
+export interface FinanceCleanupPreview {
+  from: string;
+  to: string;
+  revenue: RevenueCleanupDataset;
+  financeEntries: FinanceEntryCleanupDataset;
+  expenses: FinanceCleanupDataset;
+  commissions: FinanceCleanupDataset;
+  totalCount: number;
+  totalAmountAed: number;
+}
+
+export interface CleanupFinanceInput {
+  from: string;
+  to: string;
+  /** Must be true to authorize permanent deletion */
+  confirm: boolean;
+}
+
+export interface FinanceCleanupResponse {
+  ok: boolean;
+  from: string;
+  to: string;
+  deleted: FinanceCleanupPreview;
+  lockedFinanceEntriesCount: number;
+  deletedAt: string;
+}
+
 export interface InventoryItem {
   id: number;
   branchId: number;
@@ -689,6 +739,11 @@ to?: string;
 export type GetRevenueTrendParams = {
 branchId?: number;
 days?: number;
+};
+
+export type PreviewFinanceCleanupParams = {
+from: string;
+to: string;
 };
 
 export type ListInventoryItemsParams = {

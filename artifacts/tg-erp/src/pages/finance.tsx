@@ -2,7 +2,9 @@ import { useState, useEffect, useCallback } from "react";
 import {
   useGetFinanceSummary, useGetRevenueTrend, useListExpenses,
   useCreateExpense, useDeleteExpense, useListBranches,
+  usePreviewFinanceCleanup, useCleanupFinance, getPreviewFinanceCleanupQueryKey,
 } from "@workspace/api-client-react";
+import type { FinanceCleanupPreview, PreviewFinanceCleanupParams } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,8 +16,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
-import { DollarSign, TrendingUp, TrendingDown, Receipt, Plus, Trash2, Globe, ChefHat, Bike, Settings2, Save } from "lucide-react";
-import { format } from "date-fns";
+import { AlertTriangle, CalendarClock, CalendarRange, Database, DollarSign, Eye, Globe, ChefHat, Bike, LockKeyhole, Plus, Receipt, Save, ScanSearch, Settings2, Trash2, TrendingDown, TrendingUp } from "lucide-react";
+import { format, startOfDay, startOfMonth, startOfWeek } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
 import { getApiBase } from "@/lib/api-base";
@@ -44,6 +46,24 @@ interface CommissionData {
 
 const EXPENSE_CATEGORIES = ["Rent", "Utilities", "Supplies", "Payroll", "Marketing", "Maintenance", "Food", "Import Costs (Addis)", "Other"];
 const EMPTY_FORM = { branchId: "", category: "Rent", amountAed: "", description: "" };
+type CleanupPreset = "daily" | "weekly" | "monthly" | "custom";
+
+function cleanupInputValue(date: Date): string {
+  return format(date, "yyyy-MM-dd'T'HH:mm");
+}
+
+function presetRange(preset: Exclude<CleanupPreset, "custom">): { from: string; to: string } {
+  const now = new Date();
+  const from = preset === "daily" ? startOfDay(now) : preset === "weekly" ? startOfWeek(now, { weekStartsOn: 1 }) : startOfMonth(now);
+  return { from: cleanupInputValue(from), to: cleanupInputValue(now) };
+}
+
+function toCleanupParams(from: string, to: string): PreviewFinanceCleanupParams | null {
+  const fromDate = new Date(from);
+  const toDate = new Date(to);
+  if (!from || !to || Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime()) || fromDate >= toDate) return null;
+  return { from: fromDate.toISOString(), to: toDate.toISOString() };
+}
 
 export default function Finance() {
   const { user } = useAuth();
@@ -66,6 +86,24 @@ export default function Finance() {
   const [deliveryRate, setDeliveryRate] = useState("");
   const [savingRates, setSavingRates] = useState(false);
   const [showRateEdit, setShowRateEdit] = useState(false);
+  const initialCleanupRange = presetRange("daily");
+  const [cleanupPreset, setCleanupPreset] = useState<CleanupPreset>("daily");
+  const [cleanupFrom, setCleanupFrom] = useState(initialCleanupRange.from);
+  const [cleanupTo, setCleanupTo] = useState(initialCleanupRange.to);
+  const [cleanupPreview, setCleanupPreview] = useState<FinanceCleanupPreview | null>(null);
+  const [cleanupConfirmOpen, setCleanupConfirmOpen] = useState(false);
+  const [cleanupConfirmText, setCleanupConfirmText] = useState("");
+  const cleanupParams = toCleanupParams(cleanupFrom, cleanupTo);
+  const previewQueryParams = cleanupParams ?? { from: new Date(0).toISOString(), to: new Date(1).toISOString() };
+  const cleanupPreviewQuery = usePreviewFinanceCleanup(
+    previewQueryParams,
+    {
+      query: {
+        enabled: false,
+        queryKey: getPreviewFinanceCleanupQueryKey(previewQueryParams),
+      },
+    },
+  );
 
   useEffect(() => {
     apiFetch(`/api/addis/credit-summary${user?.branchId ? `?branchId=${user.branchId}` : ""}`)
@@ -112,9 +150,47 @@ export default function Finance() {
 
   const createExpense = useCreateExpense({ mutation: { onSuccess: () => { toast({ title: "Expense added" }); invalidate(); setExpenseDialog(false); setForm(EMPTY_FORM); }, onError: () => toast({ title: "Error", variant: "destructive" }) } });
   const deleteExpense = useDeleteExpense({ mutation: { onSuccess: () => { toast({ title: "Expense deleted" }); invalidate(); setDeleteId(null); }, onError: () => toast({ title: "Error", variant: "destructive" }) } });
+  const cleanupFinance = useCleanupFinance({
+    mutation: {
+      onSuccess: (result) => {
+        toast({ title: `${result.deleted.totalCount} revenue/finance record${result.deleted.totalCount === 1 ? "" : "s"} deleted` });
+        invalidate();
+        fetchCommissions();
+        setCleanupConfirmOpen(false);
+        setCleanupConfirmText("");
+        setCleanupPreview(null);
+      },
+      onError: () => toast({ title: "Cleanup failed", description: "No revenue or finance records were removed.", variant: "destructive" }),
+    },
+  });
 
   const save = () => {
     createExpense.mutate({ data: { branchId: user?.branchId ?? Number(form.branchId), category: form.category, amountAed: Number(form.amountAed), description: form.description || "" } });
+  };
+
+  const selectCleanupPreset = (preset: CleanupPreset) => {
+    setCleanupPreset(preset);
+    if (preset !== "custom") {
+      const range = presetRange(preset);
+      setCleanupFrom(range.from);
+      setCleanupTo(range.to);
+    }
+    setCleanupPreview(null);
+  };
+
+  const previewCleanup = async () => {
+    if (!cleanupParams) return;
+    try {
+      const result = await cleanupPreviewQuery.refetch();
+      if (result.data) setCleanupPreview(result.data);
+    } catch {
+      toast({ title: "Could not load cleanup preview", variant: "destructive" });
+    }
+  };
+
+  const confirmCleanup = () => {
+    if (!cleanupParams || !cleanupPreview || cleanupConfirmText !== "DELETE") return;
+    cleanupFinance.mutate({ data: { ...cleanupParams, confirm: true } });
   };
 
   const netAfterCommissions = (summary?.netProfit ?? 0) - (commissions?.totalCommissions ?? 0);
@@ -399,6 +475,168 @@ export default function Finance() {
         </CardContent>
       </Card>
 
+      {/* ── FINANCE DATA CLEANUP ────────────────────────────────── */}
+      {user?.role === "super_admin" || user?.role === "branch_manager" ? (
+        <Card className="border-destructive/30">
+          <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <Database className="h-5 w-5 text-destructive" />
+                Finance data cleanup
+              </CardTitle>
+              <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+                Permanently remove revenue and finance records by creation time. This includes orders and their linked operational records, plus all manual finance entries in the range.
+              </p>
+            </div>
+            <Badge variant="outline" className="w-fit gap-1 border-destructive/30 text-destructive">
+              <LockKeyhole className="h-3 w-3" /> Admin only
+            </Badge>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-4">
+              <div className="mb-3 flex items-center gap-2 text-sm font-semibold">
+                <CalendarRange className="h-4 w-4 text-destructive" />
+                Choose a cleanup range
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {([
+                  ["daily", "Today"],
+                  ["weekly", "This week"],
+                  ["monthly", "This month"],
+                  ["custom", "Custom range"],
+                ] as const).map(([value, label]) => (
+                  <Button
+                    key={value}
+                    type="button"
+                    size="sm"
+                    variant={cleanupPreset === value ? "secondary" : "outline"}
+                    data-testid={`button-cleanup-preset-${value}`}
+                    onClick={() => selectCleanupPreset(value)}
+                  >
+                    {value === "custom" && <CalendarClock className="mr-1.5 h-3.5 w-3.5" />}
+                    {label}
+                  </Button>
+                ))}
+              </div>
+              <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="cleanup-from">From</Label>
+                  <Input
+                    id="cleanup-from"
+                    type="datetime-local"
+                    value={cleanupFrom}
+                    data-testid="input-cleanup-from"
+                    onChange={(event) => { setCleanupPreset("custom"); setCleanupFrom(event.target.value); setCleanupPreview(null); }}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="cleanup-to">To</Label>
+                  <Input
+                    id="cleanup-to"
+                    type="datetime-local"
+                    value={cleanupTo}
+                    data-testid="input-cleanup-to"
+                    onChange={(event) => { setCleanupPreset("custom"); setCleanupTo(event.target.value); setCleanupPreview(null); }}
+                  />
+                </div>
+              </div>
+              {!cleanupParams && (
+                <p className="mt-3 flex items-center gap-1.5 text-xs text-destructive" data-testid="status-cleanup-range-error">
+                  <AlertTriangle className="h-3.5 w-3.5" /> Choose a valid range where From is earlier than To.
+                </p>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {[
+                ["Revenue / orders", "Orders and linked operational records", <TrendingUp className="h-4 w-4 text-green-400" />],
+                ["Manual finance entries", "All entries in the range", <Database className="h-4 w-4 text-blue-400" />],
+                ["Legacy expenses", "Operational expense records", <Receipt className="h-4 w-4 text-red-400" />],
+                ["Staff commissions", "Commission records only", <DollarSign className="h-4 w-4 text-amber-400" />],
+              ].map(([title, description, icon]) => (
+                <div key={title as string} className="rounded-lg border border-border/60 bg-muted/20 p-3">
+                  <div className="flex items-center gap-2 text-sm font-medium">{icon}{title}</div>
+                  <p className="mt-1 text-xs text-muted-foreground">{description}</p>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <p className="flex items-start gap-2 text-xs text-muted-foreground">
+                <Eye className="mt-0.5 h-4 w-4 shrink-0" />
+                Preview the exact records and amounts first. Cleanup permanently removes selected revenue and finance data.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={previewCleanup}
+                disabled={!cleanupParams || cleanupPreviewQuery.isFetching}
+                data-testid="button-preview-cleanup"
+              >
+                <ScanSearch className="mr-2 h-4 w-4" />
+                {cleanupPreviewQuery.isFetching ? "Loading preview..." : "Preview records"}
+              </Button>
+            </div>
+
+            {cleanupPreview && (
+              <div className="space-y-4 rounded-lg border border-border bg-muted/10 p-4" data-testid="status-cleanup-preview">
+                <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h3 className="font-semibold">Preview results</h3>
+                    <p className="text-xs text-muted-foreground">
+                      {format(new Date(cleanupPreview.from), "MMM d, yyyy, h:mm a")} – {format(new Date(cleanupPreview.to), "MMM d, yyyy, h:mm a")}
+                    </p>
+                  </div>
+                  <Badge variant={cleanupPreview.totalCount > 0 ? "destructive" : "secondary"}>
+                    {cleanupPreview.totalCount} record{cleanupPreview.totalCount === 1 ? "" : "s"} eligible
+                  </Badge>
+                </div>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                  {[
+                    ["Revenue / orders", cleanupPreview.revenue.count, cleanupPreview.revenue.totalAed, cleanupPreview.revenue.relatedCount],
+                    ["Manual entries", cleanupPreview.financeEntries.count, cleanupPreview.financeEntries.totalAed, 0],
+                    ["Expenses", cleanupPreview.expenses.count, cleanupPreview.expenses.totalAed],
+                    ["Commissions", cleanupPreview.commissions.count, cleanupPreview.commissions.totalAed],
+                  ].map(([label, count, amount, related]) => (
+                    <div key={label as string} className="rounded-md border border-border/60 bg-background p-3">
+                      <p className="text-xs text-muted-foreground">{label}</p>
+                      <p className="mt-1 text-lg font-semibold">{count as number}</p>
+                      <p className="text-xs text-muted-foreground">{Number(amount).toLocaleString()} AED</p>
+                      {Number(related ?? 0) > 0 && <p className="mt-1 text-[11px] text-muted-foreground">+ {related as number} linked records</p>}
+                    </div>
+                  ))}
+                </div>
+                {cleanupPreview.financeEntries.lockedCount > 0 && (
+                  <p className="flex items-center gap-1.5 text-xs text-amber-500" data-testid="status-cleanup-locked">
+                    <LockKeyhole className="h-3.5 w-3.5" />
+                    {cleanupPreview.financeEntries.lockedCount} locked manual entr{cleanupPreview.financeEntries.lockedCount === 1 ? "y" : "ies"} are included and will be deleted after confirmation.
+                  </p>
+                )}
+                {cleanupPreview.totalCount === 0 ? (
+                  <p className="text-sm text-muted-foreground">No records are eligible in this range.</p>
+                ) : (
+                  <div className="flex flex-col gap-3 border-t border-border/60 pt-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-sm text-muted-foreground">Total to be permanently deleted</p>
+                      <p className="text-xl font-bold text-destructive">{cleanupPreview.totalAmountAed.toLocaleString()} AED</p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      onClick={() => { setCleanupConfirmText(""); setCleanupConfirmOpen(true); }}
+                      disabled={cleanupFinance.isPending}
+                      data-testid="button-open-cleanup-confirm"
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" /> Delete these records
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
+
       {/* Add Expense Dialog */}
       <Dialog open={expenseDialog} onOpenChange={setExpenseDialog}>
         <DialogContent>
@@ -436,6 +674,41 @@ export default function Finance() {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={() => deleteId && deleteExpense.mutate({ id: deleteId })} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Delete</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={cleanupConfirmOpen} onOpenChange={(open) => { if (!open && !cleanupFinance.isPending) { setCleanupConfirmOpen(false); setCleanupConfirmText(""); } }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="h-5 w-5" /> Permanently delete finance records?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete {cleanupPreview?.totalCount ?? 0} revenue and finance records representing {cleanupPreview?.totalAmountAed.toLocaleString() ?? "0"} AED from the selected range. This includes locked manual entries and linked order records. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="cleanup-confirm">Type DELETE to confirm</Label>
+            <Input
+              id="cleanup-confirm"
+              value={cleanupConfirmText}
+              data-testid="input-cleanup-confirm"
+              onChange={(event) => setCleanupConfirmText(event.target.value)}
+              placeholder="DELETE"
+              autoComplete="off"
+            />
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={cleanupFinance.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => { event.preventDefault(); confirmCleanup(); }}
+              disabled={cleanupConfirmText !== "DELETE" || cleanupFinance.isPending || !cleanupPreview}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-confirm-cleanup"
+            >
+              {cleanupFinance.isPending ? "Deleting..." : "Permanently delete"}
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

@@ -1049,6 +1049,84 @@ export const GetRevenueTrendResponse = zod.array(GetRevenueTrendResponseItem)
 
 
 /**
+ * @summary Preview finance records eligible for permanent deletion
+ */
+export const PreviewFinanceCleanupQueryParams = zod.object({
+  "from": zod.date(),
+  "to": zod.date()
+})
+
+export const PreviewFinanceCleanupResponse = zod.object({
+  "from": zod.string(),
+  "to": zod.string(),
+  "revenue": zod.object({
+  "count": zod.number().describe('Revenue orders in the range'),
+  "totalAed": zod.number().describe('Revenue total represented by those orders'),
+  "relatedCount": zod.number().describe('Linked order items, deliveries, status records, lottery records, and WhatsApp records also deleted')
+}),
+  "financeEntries": zod.object({
+  "count": zod.number(),
+  "totalAed": zod.number(),
+  "lockedCount": zod.number().describe('Locked entries in the range included in the deletion'),
+  "lockedAmountAed": zod.number().describe('Amount represented by locked entries in the range')
+}),
+  "expenses": zod.object({
+  "count": zod.number(),
+  "totalAed": zod.number()
+}),
+  "commissions": zod.object({
+  "count": zod.number(),
+  "totalAed": zod.number()
+}),
+  "totalCount": zod.number(),
+  "totalAmountAed": zod.number()
+})
+
+
+/**
+ * @summary Permanently delete finance records in a confirmed time range
+ */
+export const CleanupFinanceBody = zod.object({
+  "from": zod.coerce.date(),
+  "to": zod.coerce.date(),
+  "confirm": zod.boolean().describe('Must be true to authorize permanent deletion')
+})
+
+export const CleanupFinanceResponse = zod.object({
+  "ok": zod.boolean(),
+  "from": zod.string(),
+  "to": zod.string(),
+  "deleted": zod.object({
+  "from": zod.string(),
+  "to": zod.string(),
+  "revenue": zod.object({
+  "count": zod.number().describe('Revenue orders in the range'),
+  "totalAed": zod.number().describe('Revenue total represented by those orders'),
+  "relatedCount": zod.number().describe('Linked order items, deliveries, status records, lottery records, and WhatsApp records also deleted')
+}),
+  "financeEntries": zod.object({
+  "count": zod.number(),
+  "totalAed": zod.number(),
+  "lockedCount": zod.number().describe('Locked entries in the range included in the deletion'),
+  "lockedAmountAed": zod.number().describe('Amount represented by locked entries in the range')
+}),
+  "expenses": zod.object({
+  "count": zod.number(),
+  "totalAed": zod.number()
+}),
+  "commissions": zod.object({
+  "count": zod.number(),
+  "totalAed": zod.number()
+}),
+  "totalCount": zod.number(),
+  "totalAmountAed": zod.number()
+}),
+  "lockedFinanceEntriesCount": zod.number(),
+  "deletedAt": zod.string()
+})
+
+
+/**
  * @summary List inventory items
  */
 export const ListInventoryItemsQueryParams = zod.object({
