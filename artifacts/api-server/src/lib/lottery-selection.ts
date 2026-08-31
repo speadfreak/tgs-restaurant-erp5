@@ -7,7 +7,7 @@ import {
   lotteryWinnersTable,
 } from "@workspace/db";
 
-const FAIR_SELECTION_VERSION = "fair-rotation-v1";
+const FAIR_SELECTION_VERSION = "fair-volume-v2";
 
 export type LotterySelectionEntry = {
   id: number;
@@ -27,6 +27,8 @@ export type LotterySelectionSummary = {
   latestPreviousDrawDate: string | null;
   recentWinnerCooldownApplied: boolean;
   onePrizePerCustomerApplied: boolean;
+  orderVolumeWeightingApplied: boolean;
+  diminishingReturnsApplied: boolean;
 };
 
 export function uaeDate(date = new Date()): string {
@@ -69,6 +71,25 @@ function seededRandomIndex(seed: string, counter: number, max: number): number {
   }
 }
 
+function seededRandomFraction(seed: string, counter: number): number {
+  const digest = crypto.createHash("sha256")
+    .update(`${seed}:${counter}:fraction`)
+    .digest();
+  return digest.readUInt32BE(0) / 0x1_0000_0000;
+}
+
+function weightedRandomIndex(weights: number[], seed: string, counter: number): number {
+  const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
+  if (weights.length <= 1 || totalWeight <= 0) return 0;
+
+  let target = seededRandomFraction(seed, counter) * totalWeight;
+  for (let index = 0; index < weights.length; index++) {
+    target -= weights[index];
+    if (target < 0) return index;
+  }
+  return weights.length - 1;
+}
+
 export function selectFairWinners<T extends LotterySelectionEntry>(
   entries: T[],
   history: LotteryWinnerHistory[],
@@ -97,6 +118,14 @@ export function selectFairWinners<T extends LotterySelectionEntry>(
   const historicalWinnerCustomers = [...winsByCustomer.keys()]
     .filter(key => eligibleCustomerKeys.has(key)).length;
 
+  const entriesByCustomer = new Map<string, T[]>();
+  for (const entry of entries) {
+    const key = customerKey(entry.customerPhone);
+    const customerEntries = entriesByCustomer.get(key) ?? [];
+    customerEntries.push(entry);
+    entriesByCustomer.set(key, customerEntries);
+  }
+
   const selected: T[] = [];
   const selectedEntryIds = new Set<number>();
   const selectedCustomerKeys = new Set<string>();
@@ -104,44 +133,53 @@ export function selectFairWinners<T extends LotterySelectionEntry>(
   let onePrizePerCustomerApplied = false;
 
   for (let slot = 0; slot < Math.max(0, Math.floor(winnerCount)); slot++) {
-    const remaining = entries.filter(entry => !selectedEntryIds.has(entry.id));
-    if (remaining.length === 0) break;
+    const remainingByCustomer = [...entriesByCustomer.entries()]
+      .map(([key, customerEntries]) => [
+        key,
+        customerEntries.filter(entry => !selectedEntryIds.has(entry.id)),
+      ] as const)
+      .filter(([, customerEntries]) => customerEntries.length > 0);
+    if (remainingByCustomer.length === 0) break;
 
     // Keep the first pass to one prize per customer. If there are more prizes
     // than distinct customers, repeats become possible only after everyone has
     // received their first chance.
-    const uniqueCustomerPool = remaining.filter(
-      entry => !selectedCustomerKeys.has(customerKey(entry.customerPhone)),
+    const uniqueCustomerPool = remainingByCustomer.filter(
+      ([key]) => !selectedCustomerKeys.has(key),
     );
-    const pool = uniqueCustomerPool.length > 0 ? uniqueCustomerPool : remaining;
-    if (pool.length < remaining.length) onePrizePerCustomerApplied = true;
+    const customerPool = uniqueCustomerPool.length > 0 ? uniqueCustomerPool : remainingByCustomer;
+    if (uniqueCustomerPool.length < remainingByCustomer.length) onePrizePerCustomerApplied = true;
 
     // A previous-draw winner gets a cooldown when another customer is
     // available. This prevents back-to-back wins without making a draw
     // impossible when the eligible pool is small.
-    const cooldownPool = pool.filter(
-      entry => !recentWinnerKeys.has(customerKey(entry.customerPhone)),
+    const cooldownPool = customerPool.filter(
+      ([key]) => !recentWinnerKeys.has(key),
     );
-    const fairnessPool = cooldownPool.length > 0 ? cooldownPool : pool;
-    if (cooldownPool.length > 0 && cooldownPool.length < pool.length) {
+    const fairnessPool = cooldownPool.length > 0 ? cooldownPool : customerPool;
+    if (cooldownPool.length > 0 && cooldownPool.length < customerPool.length) {
       recentWinnerCooldownApplied = true;
     }
 
-    const minimumWinCount = Math.min(
-      ...fairnessPool.map(entry => winsByCustomer.get(customerKey(entry.customerPhone)) ?? 0),
-    );
-    const lowestWinCountPool = fairnessPool.filter(
-      entry => (winsByCustomer.get(customerKey(entry.customerPhone)) ?? 0) === minimumWinCount,
-    );
-    const entry = lowestWinCountPool[
-      seededRandomIndex(seed, slot, lowestWinCountPool.length)
+    // Reward genuine order volume, but use diminishing returns so ten orders
+    // do not make one customer ten times as likely as a single-order customer.
+    // Previous wins reduce the weight, while the one-prize cap protects the
+    // draw from being monopolized by a high-volume customer.
+    const weights = fairnessPool.map(([key, customerEntries]) => {
+      const orderVolumeWeight = Math.sqrt(customerEntries.length);
+      const historicalWinPenalty = 1 / (1 + (winsByCustomer.get(key) ?? 0));
+      return orderVolumeWeight * historicalWinPenalty;
+    });
+    const selectedCustomerIndex = weightedRandomIndex(weights, seed, slot);
+    const [selectedKey, selectedCustomerEntries] = fairnessPool[selectedCustomerIndex];
+    const entry = selectedCustomerEntries[
+      seededRandomIndex(seed, slot + 10_000, selectedCustomerEntries.length)
     ];
 
     selected.push(entry);
     selectedEntryIds.add(entry.id);
-    const key = customerKey(entry.customerPhone);
-    selectedCustomerKeys.add(key);
-    winsByCustomer.set(key, (winsByCustomer.get(key) ?? 0) + 1);
+    selectedCustomerKeys.add(selectedKey);
+    winsByCustomer.set(selectedKey, (winsByCustomer.get(selectedKey) ?? 0) + 1);
   }
 
   return {
@@ -154,6 +192,8 @@ export function selectFairWinners<T extends LotterySelectionEntry>(
       latestPreviousDrawDate,
       recentWinnerCooldownApplied,
       onePrizePerCustomerApplied,
+      orderVolumeWeightingApplied: true,
+      diminishingReturnsApplied: true,
     },
   };
 }

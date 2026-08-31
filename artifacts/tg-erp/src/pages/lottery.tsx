@@ -840,10 +840,10 @@ export default function LotteryPage() {
                 <div>
                   <h3 className="text-sm font-bold text-sky-300">How fair selection works</h3>
                   <p className="text-xs text-sky-100/65 mt-1.5 leading-relaxed">
-                    Winners are not chosen from a plain daily shuffle. For each prize, the system first gives priority to customers with the fewest previous wins. A customer who won the immediately previous draw is temporarily skipped when another eligible customer is available.
+                    Winners are not chosen from a plain daily shuffle. Customers with more orders in this draw receive more chances, using diminishing returns so a high-volume customer is rewarded without overwhelming everyone else. Previous wins reduce that advantage, and a customer who won the immediately previous draw is temporarily skipped when another eligible customer is available.
                   </p>
                   <p className="text-xs text-sky-100/65 mt-2 leading-relaxed">
-                    Each customer can receive only one prize per draw until every eligible customer has had a chance. Secure randomness breaks ties between customers with the same win history, so the process stays fair and unpredictable.
+                    Each customer can receive only one prize per draw until every eligible customer has had a chance. Secure randomness keeps weighted selections unpredictable and gives every eligible customer a real chance to win.
                   </p>
                 </div>
               </div>
