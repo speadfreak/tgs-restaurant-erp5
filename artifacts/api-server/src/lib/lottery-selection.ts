@@ -7,7 +7,7 @@ import {
   lotteryWinnersTable,
 } from "@workspace/db";
 
-const FAIR_SELECTION_VERSION = "fair-volume-v2";
+const FAIR_SELECTION_VERSION = "fair-ticket-volume-v3";
 
 export type LotterySelectionEntry = {
   id: number;
@@ -28,7 +28,7 @@ export type LotterySelectionSummary = {
   recentWinnerCooldownApplied: boolean;
   onePrizePerCustomerApplied: boolean;
   orderVolumeWeightingApplied: boolean;
-  diminishingReturnsApplied: boolean;
+  oneTicketPerOrderApplied: boolean;
 };
 
 export function uaeDate(date = new Date()): string {
@@ -161,12 +161,12 @@ export function selectFairWinners<T extends LotterySelectionEntry>(
       recentWinnerCooldownApplied = true;
     }
 
-    // Reward genuine order volume, but use diminishing returns so ten orders
-    // do not make one customer ten times as likely as a single-order customer.
-    // Previous wins reduce the weight, while the one-prize cap protects the
-    // draw from being monopolized by a high-volume customer.
+    // Every order is one real ticket. This makes a customer with three orders
+    // three times as likely as a customer with one order in the same fairness
+    // group. Previous wins reduce the weight, while the one-prize cap protects
+    // the draw from being monopolized by a high-volume customer.
     const weights = fairnessPool.map(([key, customerEntries]) => {
-      const orderVolumeWeight = Math.sqrt(customerEntries.length);
+      const orderVolumeWeight = customerEntries.length;
       const historicalWinPenalty = 1 / (1 + (winsByCustomer.get(key) ?? 0));
       return orderVolumeWeight * historicalWinPenalty;
     });
@@ -193,7 +193,7 @@ export function selectFairWinners<T extends LotterySelectionEntry>(
       recentWinnerCooldownApplied,
       onePrizePerCustomerApplied,
       orderVolumeWeightingApplied: true,
-      diminishingReturnsApplied: true,
+      oneTicketPerOrderApplied: true,
     },
   };
 }

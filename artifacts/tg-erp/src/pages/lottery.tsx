@@ -532,6 +532,20 @@ export default function LotteryPage() {
 
   // Eligible = sent via Twilio OR manually marked by admin
   const sentEntries = entries.filter(e => e.luckyNumberSent || e.manuallySent);
+  const customerTicketSummary = Array.from(entries.reduce((summary, entry) => {
+    const key = entry.customerPhone.replace(/^whatsapp:/i, "").replace(/[^\d+]/g, "");
+    const existing = summary.get(key) ?? {
+      phone: entry.customerPhone,
+      name: entry.customerName,
+      ticketCount: 0,
+      eligibleTickets: 0,
+    };
+    existing.ticketCount += 1;
+    if (entry.luckyNumberSent || entry.manuallySent) existing.eligibleTickets += 1;
+    summary.set(key, existing);
+    return summary;
+  }, new Map<string, { phone: string; name: string | null; ticketCount: number; eligibleTickets: number }>()).values())
+    .sort((a, b) => b.ticketCount - a.ticketCount);
   // manuallySent toggle handler
   const toggleManuallySent = async (entry: LotteryEntry) => {
     try {
@@ -725,9 +739,39 @@ export default function LotteryPage() {
             <div className="rounded-xl border border-amber-700/40 bg-amber-950/20 p-4 flex items-start gap-3">
               <Send className="h-4 w-4 text-amber-400 flex-shrink-0 mt-0.5" />
               <p className="text-sm text-amber-200/80">
-                Copy each lucky number and send it to the customer via WhatsApp manually. Numbers are generated automatically when orders are created.
+                Every order creates one separate lottery ticket. A customer with 3 orders receives 3 tickets and therefore 3× the base chance of a customer with 1 order. Copy each lucky number and send it to the customer via WhatsApp.
               </p>
             </div>
+
+            {customerTicketSummary.length > 0 && (
+              <div className="rounded-xl border p-4 space-y-3" style={{ borderColor: "hsl(203 80% 45% / 0.35)", background: "hsl(203 45% 9% / 0.7)" }}>
+                <div className="flex items-start gap-3">
+                  <Star className="h-4 w-4 text-sky-400 mt-0.5 flex-shrink-0" />
+                  <div>
+                    <h3 className="text-sm font-bold text-sky-300">Ticket advantage scoreboard</h3>
+                    <p className="text-xs text-sky-100/65 mt-1">
+                      Each order is counted as one ticket. More tickets mean more priority, while the draw still limits each customer to one prize before giving others their first chance.
+                    </p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                  {customerTicketSummary.slice(0, 6).map(customer => (
+                    <div key={customer.phone} className="rounded-lg border border-sky-900/60 bg-sky-950/20 px-3 py-2.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs text-zinc-200 truncate">{customer.name ?? customer.phone}</span>
+                        <span className="text-sm font-black text-amber-400">{customer.ticketCount} {customer.ticketCount === 1 ? "ticket" : "tickets"}</span>
+                      </div>
+                      <p className="text-[11px] text-zinc-500 mt-1">
+                        {customer.eligibleTickets}/{customer.ticketCount} eligible for this draw
+                      </p>
+                    </div>
+                  ))}
+                </div>
+                {customerTicketSummary.length > 6 && (
+                  <p className="text-[11px] text-zinc-500">Showing the 6 customers with the most tickets. Every customer’s tickets are included in the draw.</p>
+                )}
+              </div>
+            )}
 
             <div className="rounded-xl border p-4 space-y-3" style={{ borderColor: "hsl(38 30% 15%)", background: "hsl(38 30% 6%)" }}>
               <div className="flex items-start justify-between gap-3">
@@ -840,7 +884,7 @@ export default function LotteryPage() {
                 <div>
                   <h3 className="text-sm font-bold text-sky-300">How fair selection works</h3>
                   <p className="text-xs text-sky-100/65 mt-1.5 leading-relaxed">
-                    Winners are not chosen from a plain daily shuffle. Customers with more orders in this draw receive more chances, using diminishing returns so a high-volume customer is rewarded without overwhelming everyone else. Previous wins reduce that advantage, and a customer who won the immediately previous draw is temporarily skipped when another eligible customer is available.
+                    Winners are not chosen from a plain daily shuffle. Every order creates one real ticket, so customers with more orders receive more draw weight. Previous wins reduce that advantage, and a customer who won the immediately previous draw is temporarily skipped when another eligible customer is available.
                   </p>
                   <p className="text-xs text-sky-100/65 mt-2 leading-relaxed">
                     Each customer can receive only one prize per draw until every eligible customer has had a chance. Secure randomness keeps weighted selections unpredictable and gives every eligible customer a real chance to win.
