@@ -22,6 +22,13 @@ interface MenuItem {
 }
 interface Category { id: number; nameEn: string }
 interface CartItem { menuItemId: number; name: string; quantity: number; unitPrice: number }
+interface LotteryTicket {
+  id: number;
+  orderId: number;
+  orderCode: string;
+  luckyNumber: number;
+  drawDate: string;
+}
 interface DeliveryOrder {
   id: number; orderCode: string; status: string; channel: string;
   customerName: string | null; customerPhone: string | null; deliveryAddress: string | null;
@@ -29,6 +36,7 @@ interface DeliveryOrder {
   staffName: string | null; claimedAt: string | null;
   markedReadyAt: string | null;
   luckyNumber: number | null;
+  lotteryTickets: LotteryTicket[];
   items: { menuItemName: string | null; quantity: number }[];
   totalAed: number; createdAt: string; updatedAt?: string;
 }
@@ -79,6 +87,67 @@ function StatusPill({ status }: { status: string }) {
 }
 
 const EMPTY_RELAY = { customerName: "", customerPhone: "", deliveryAddress: "" };
+
+interface LotteryCustomerGroup {
+  key: string;
+  name: string | null;
+  phone: string | null;
+  tickets: LotteryTicket[];
+}
+
+function normalizeCustomerPhone(phone: string | null): string {
+  return (phone ?? "").replace(/^whatsapp:/i, "").replace(/[^\d+]/g, "");
+}
+
+function ticketsForOrder(order: DeliveryOrder): LotteryTicket[] {
+  if (order.lotteryTickets?.length) return order.lotteryTickets;
+  if (order.luckyNumber === null || order.luckyNumber === undefined) return [];
+  return [{
+    id: order.id,
+    orderId: order.id,
+    orderCode: order.orderCode,
+    luckyNumber: order.luckyNumber,
+    drawDate: order.createdAt.slice(0, 10),
+  }];
+}
+
+function groupLotteryTickets(orders: DeliveryOrder[]): LotteryCustomerGroup[] {
+  const groups = new Map<string, LotteryCustomerGroup>();
+  for (const order of orders) {
+    const tickets = ticketsForOrder(order);
+    if (tickets.length === 0) continue;
+    const phone = order.customerPhone;
+    const key = normalizeCustomerPhone(phone) || `order:${order.id}`;
+    const existing = groups.get(key) ?? {
+      key,
+      name: order.customerName,
+      phone,
+      tickets: [],
+    };
+    const knownTicketIds = new Set(existing.tickets.map(ticket => ticket.id));
+    for (const ticket of tickets) {
+      if (!knownTicketIds.has(ticket.id)) existing.tickets.push(ticket);
+    }
+    groups.set(key, existing);
+  }
+  return Array.from(groups.values()).sort((a, b) =>
+    b.tickets.length - a.tickets.length || (a.name ?? a.phone ?? "").localeCompare(b.name ?? b.phone ?? ""),
+  );
+}
+
+function buildLotteryMessage(group: LotteryCustomerGroup): string {
+  const ticketLines = group.tickets.map((ticket, index) =>
+    `🎟️ Ticket ${index + 1} — Order ${ticket.orderCode}: ${ticket.luckyNumber}`,
+  );
+  return [
+    "🎉 ስለደንበኝነትዎ እናመሰግናለን! | Thank You for Choosing Us!",
+    "",
+    group.tickets.length === 1 ? "🎟️ Your Lucky Number:" : "🎟️ Your Lucky Numbers:",
+    ...ticketLines,
+    "",
+    "📌 እባክዎ ቁጥሮቹን ይያዙት። | Please keep these numbers for our upcoming prize draw.",
+  ].join("\n");
+}
 
 export default function DeliveryPortal() {
   const { user, logout, isLoading } = useAuth();
@@ -355,6 +424,10 @@ export default function DeliveryPortal() {
     (o.assignedDeliveryUserId === user?.id || o.relayedByUserId === user?.id) &&
     isYesterdayUAE(o.updatedAt ?? o.createdAt)
   );
+  const todayLotteryGroups = groupLotteryTickets(recentlyDelivered);
+  const yesterdayLotteryGroups = groupLotteryTickets(yesterdayLottery);
+  const ticketCount = (groups: LotteryCustomerGroup[]) =>
+    groups.reduce((total, group) => total + group.tickets.length, 0);
 
   if (isLoading) return (
     <div className="min-h-screen flex items-center justify-center" style={{ background: "hsl(0 0% 4%)" }}>
@@ -743,11 +816,56 @@ export default function DeliveryPortal() {
               </div>
             )}
 
-            {/* ── TODAY'S DELIVERED ORDERS (lucky number copy) ── */}
+            {/* ── TODAY'S LOTTERY HANDOFF ── */}
+            {todayLotteryGroups.length > 0 && (
+              <div className="space-y-2.5">
+                <h3 className="font-bold text-amber-400 flex items-center gap-2 text-sm">
+                  <Star className="h-4 w-4" />Lottery Tickets to Send ({ticketCount(todayLotteryGroups)})
+                </h3>
+                <p className="text-xs text-zinc-600">
+                  Customers with multiple orders are grouped together so one copy sends every ticket they earned.
+                </p>
+                {todayLotteryGroups.map(group => (
+                  <div key={group.key} className="queue-card" style={{ borderLeftColor: "hsl(38 88% 52%)" }}>
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="font-bold text-zinc-200">{group.name ?? group.phone ?? "Customer"}</div>
+                        {group.phone && <div className="text-xs text-zinc-500 mt-0.5">{group.phone}</div>}
+                      </div>
+                      <span className="text-xs font-black text-amber-400">
+                        {group.tickets.length} {group.tickets.length === 1 ? "ticket" : "tickets"}
+                      </span>
+                    </div>
+                    <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {group.tickets.map((ticket, index) => (
+                        <div key={ticket.id} className="rounded-lg border border-amber-900/40 bg-amber-950/10 px-3 py-2">
+                          <div className="text-[11px] text-zinc-500">Ticket {index + 1} · {ticket.orderCode}</div>
+                          <div className="code-text text-xl font-black text-amber-400">#{ticket.luckyNumber}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="w-full h-9 mt-3 text-xs font-black border-amber-500/40 text-amber-400 hover:bg-amber-950/20"
+                      onClick={() => navigator.clipboard.writeText(buildLotteryMessage(group)).then(
+                        () => toast({ title: "📋 All lottery tickets copied", description: `Ready to send to ${group.name ?? group.phone ?? "the customer"}` }),
+                        () => toast({ title: "Copy failed", description: "Use long-press to copy manually", variant: "destructive" }),
+                      )}
+                    >
+                      <Copy className="h-3.5 w-3.5 mr-1.5" />
+                      Copy All {group.tickets.length} {group.tickets.length === 1 ? "Ticket" : "Tickets"}
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* ── TODAY'S DELIVERED ORDERS ── */}
             {recentlyDelivered.length > 0 && (
               <div className="space-y-2.5">
                 <h3 className="font-bold text-zinc-500 flex items-center gap-2 text-sm">
-                  <CheckCircle2 className="h-4 w-4 text-zinc-600" />Today's Delivered ({recentlyDelivered.length})
+                  <CheckCircle2 className="h-4 w-4 text-zinc-600" />Today&apos;s Delivered ({recentlyDelivered.length})
                 </h3>
                 {recentlyDelivered.map(order => {
                   const hasLucky = order.luckyNumber !== null && order.luckyNumber !== undefined;
@@ -793,36 +911,42 @@ export default function DeliveryPortal() {
             )}
 
             {/* ── YESTERDAY'S LOTTERY HISTORY ── */}
-            {yesterdayLottery.length > 0 && (
+            {yesterdayLotteryGroups.length > 0 && (
               <div className="space-y-2.5">
                 <h3 className="font-bold text-amber-400 flex items-center gap-2 text-sm">
-                  <History className="h-4 w-4" />Yesterday&apos;s Lottery History ({yesterdayLottery.length})
+                  <History className="h-4 w-4" />Yesterday&apos;s Lottery History ({ticketCount(yesterdayLotteryGroups)} tickets)
                 </h3>
-                <p className="text-xs text-zinc-600">These lucky numbers remain available after midnight so you can still send them today.</p>
-                {yesterdayLottery.map(order => {
-                  const message = `🎉 ስለደንበኝነትዎ እናመሰግናለን! | Thank You for Choosing Us!\n\n🎟️ የዕጣ ቁጥርዎ | Your Lucky Number: ${order.luckyNumber}\n\n📌 እባክዎ ቁጥሩን ይያዙት። | Please keep this number for our upcoming prize draw.`;
+                <p className="text-xs text-zinc-600">These lucky numbers remain available after midnight so you can still send every ticket today.</p>
+                {yesterdayLotteryGroups.map(group => {
                   return (
-                    <div key={order.id} className="queue-card" style={{ borderLeftColor: "hsl(38 88% 52%)" }}>
+                    <div key={group.key} className="queue-card" style={{ borderLeftColor: "hsl(38 88% 52%)" }}>
                       <div className="flex items-center justify-between gap-3 mb-2">
                         <div>
-                          <div className="code-text text-lg text-amber-400">{order.orderCode}</div>
-                          <div className="text-sm text-zinc-300">{order.customerName}</div>
+                          <div className="text-sm font-bold text-zinc-200">{group.name ?? group.phone ?? "Customer"}</div>
+                          {group.phone && <div className="text-xs text-zinc-500">{group.phone}</div>}
                         </div>
                         <div className="text-right">
-                          <div className="text-xs text-zinc-500">Lucky number</div>
-                          <div className="code-text text-xl text-amber-400">#{order.luckyNumber}</div>
+                          <div className="text-xs text-zinc-500">Tickets</div>
+                          <div className="code-text text-xl text-amber-400">{group.tickets.length}</div>
                         </div>
+                      </div>
+                      <div className="flex flex-wrap gap-2 mb-3">
+                        {group.tickets.map(ticket => (
+                          <span key={ticket.id} className="code-text text-sm text-amber-400 border border-amber-900/40 rounded px-2 py-1">
+                            #{ticket.luckyNumber}
+                          </span>
+                        ))}
                       </div>
                       <Button
                         size="sm"
                         variant="outline"
                         className="w-full h-8 text-xs font-bold border-amber-500/30 text-amber-400 hover:bg-amber-950/20"
-                        onClick={() => navigator.clipboard.writeText(message).then(
-                          () => toast({ title: "Lucky number message copied", description: `Ready to send for ${order.orderCode}` }),
+                        onClick={() => navigator.clipboard.writeText(buildLotteryMessage(group)).then(
+                          () => toast({ title: "All lottery tickets copied", description: `Ready to send to ${group.name ?? group.phone ?? "the customer"}` }),
                           () => toast({ title: "Copy failed", description: "Use long-press to copy manually", variant: "destructive" }),
                         )}
                       >
-                        <Copy className="h-3 w-3 mr-1.5" />Copy Message for Customer
+                        <Copy className="h-3 w-3 mr-1.5" />Copy All {group.tickets.length} Tickets
                       </Button>
                     </div>
                   );
@@ -830,7 +954,7 @@ export default function DeliveryPortal() {
               </div>
             )}
 
-            {readyToClaim.length === 0 && active.length === 0 && myRelayedOrders.length === 0 && recentlyDelivered.length === 0 && yesterdayLottery.length === 0 && (
+            {readyToClaim.length === 0 && active.length === 0 && myRelayedOrders.length === 0 && recentlyDelivered.length === 0 && yesterdayLotteryGroups.length === 0 && (
               loadingOrders ? (
                 <div className="text-center py-6 text-zinc-600 text-xs animate-pulse">Checking for orders...</div>
               ) : null

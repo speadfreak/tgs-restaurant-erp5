@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, desc, and, or } from "drizzle-orm";
+import { eq, desc, and, or, inArray } from "drizzle-orm";
 import { db, ordersTable, orderItemsTable, customersTable, branchesTable, menuItemsTable, orderStatusHistoryTable, usersTable, lotteryEntriesTable, lotterySettingsTable, commissionsTable, settingsTable, deliveriesTable } from "@workspace/db";
 import { sendTeamsNotification } from "../lib/teams";
 import { sendWhatsAppMessage } from "../lib/twilio";
@@ -456,18 +456,28 @@ router.get("/delivery/queue", authenticate, requireRole(...DELIVERY_ROLES), asyn
       ? db.select().from(orderItemsTable)
       : Promise.resolve([] as (typeof orderItemsTable.$inferSelect)[]),
     orderIds.length
-      ? db.select({ orderId: lotteryEntriesTable.orderId, luckyNumber: lotteryEntriesTable.luckyNumber }).from(lotteryEntriesTable)
-      : Promise.resolve([] as Array<{ orderId: number; luckyNumber: number }>),
+      ? db.select({
+        id: lotteryEntriesTable.id,
+        orderId: lotteryEntriesTable.orderId,
+        luckyNumber: lotteryEntriesTable.luckyNumber,
+        drawDate: lotteryEntriesTable.drawDate,
+      }).from(lotteryEntriesTable).where(inArray(lotteryEntriesTable.orderId, orderIds))
+      : Promise.resolve([] as Array<{ id: number; orderId: number; luckyNumber: number; drawDate: string }>),
   ]);
   const itemsByOrder = new Map<number, typeof allItems>();
   for (const i of allItems) {
     if (!itemsByOrder.has(i.orderId)) itemsByOrder.set(i.orderId, []);
     itemsByOrder.get(i.orderId)!.push(i);
   }
-  const luckyByOrder = new Map(allLotteryEntries.filter(e => e.luckyNumber !== null).map(e => [e.orderId, e.luckyNumber]));
+  const lotteryByOrder = new Map<number, typeof allLotteryEntries>();
+  for (const entry of allLotteryEntries) {
+    if (!lotteryByOrder.has(entry.orderId)) lotteryByOrder.set(entry.orderId, []);
+    lotteryByOrder.get(entry.orderId)!.push(entry);
+  }
 
   const enriched = await Promise.all(sliced.map(async (order) => {
     const items = itemsByOrder.get(order.id) ?? [];
+    const lotteryTickets = lotteryByOrder.get(order.id) ?? [];
     const customer = order.customerId
       ? (await db.select().from(customersTable).where(eq(customersTable.id, order.customerId)))[0]
       : null;
@@ -484,7 +494,17 @@ router.get("/delivery/queue", authenticate, requireRole(...DELIVERY_ROLES), asyn
       staffName: order.assignedDeliveryUserId ? (userMap.get(order.assignedDeliveryUserId) ?? null) : null,
       claimedAt: order.claimedAt?.toISOString() ?? null,
       markedReadyAt: order.markedReadyAt?.toISOString() ?? null,
-      luckyNumber: luckyByOrder.get(order.id) ?? null,
+      // Keep luckyNumber for existing clients, while lotteryTickets exposes
+      // every ticket so the delivery portal can group multiple orders for one
+      // customer into a single message.
+      luckyNumber: lotteryTickets[0]?.luckyNumber ?? null,
+      lotteryTickets: lotteryTickets.map(entry => ({
+        id: entry.id,
+        orderId: entry.orderId,
+        orderCode: order.orderCode,
+        luckyNumber: entry.luckyNumber,
+        drawDate: entry.drawDate,
+      })),
       items: items.map(i => ({ menuItemName: nameMap.get(i.menuItemId) ?? null, quantity: i.quantity })),
       totalAed: Number(order.totalAed),
       createdAt: order.createdAt.toISOString(),
