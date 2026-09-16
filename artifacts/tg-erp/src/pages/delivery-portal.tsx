@@ -864,8 +864,8 @@ export default function DeliveryPortal() {
             {/* ── TODAY'S DELIVERED ORDERS ── */}
             {recentlyDelivered.length > 0 && (
               <div className="space-y-2.5">
-                <h3 className="font-bold text-zinc-500 flex items-center gap-2 text-sm">
-                  <CheckCircle2 className="h-4 w-4 text-zinc-600" />Today&apos;s Delivered ({recentlyDelivered.length})
+                <h3 className="font-bold text-emerald-400 flex items-center gap-2 text-sm">
+                  <CheckCircle2 className="h-4 w-4" />Delivered — Send Ticket ({recentlyDelivered.length})
                 </h3>
                 {recentlyDelivered.map(order => {
                   const hasLucky = order.luckyNumber !== null && order.luckyNumber !== undefined;
@@ -882,7 +882,7 @@ export default function DeliveryPortal() {
                     }
                   };
                   return (
-                    <div key={order.id} className="queue-card opacity-75" style={{ borderLeftColor: "hsl(0 0% 25%)" }}>
+                    <div key={order.id} className="queue-card" style={{ borderLeftColor: "hsl(142 70% 45%)" }}>
                       <div className="flex justify-between items-start mb-1.5">
                         <div>
                           <div className="code-text text-lg text-zinc-400">{order.orderCode}</div>
@@ -895,13 +895,12 @@ export default function DeliveryPortal() {
                       </div>
                       {hasLucky && (
                         <Button
-                          size="sm"
-                          variant="outline"
-                          className="w-full h-8 text-xs font-bold border-amber-500/30 text-amber-400 hover:bg-amber-950/20"
+                          size="default"
+                          className="w-full h-11 mt-3 text-sm font-black bg-amber-500 text-zinc-950 hover:bg-amber-400 shadow-lg shadow-amber-500/20"
                           onClick={copyLucky}
                         >
-                          <Star className="h-3 w-3 mr-1.5" />
-                          📋 Copy Lucky Number Message (#{order.luckyNumber})
+                          <Copy className="h-4 w-4 mr-2" />
+                          Copy Ticket Message · #{order.luckyNumber}
                         </Button>
                       )}
                     </div>
