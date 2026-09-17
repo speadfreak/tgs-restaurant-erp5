@@ -26,6 +26,7 @@ import {
 } from "@workspace/api-zod";
 import { getIO } from "../lib/socket";
 import { authenticate, authenticateOptional, requireRole, ADMIN_ROLES, KITCHEN_ROLES, DELIVERY_ROLES, ORDER_INTAKE_ROLES } from "../middlewares/auth";
+import { ensureLotteryEntriesForOrder, uaeDate } from "../lib/lottery-entries";
 
 const router: Router = Router();
 
@@ -154,61 +155,25 @@ router.post("/orders", authenticateOptional, async (req, res): Promise<void> => 
   tryEmitTo(`branch:${order.branchId}:kitchen`, "order:new", result);
   tryEmitTo(`branch:${order.branchId}:admin`, "order:new", result);
 
-  // Lottery: generate lucky number immediately on order creation (no Twilio — admin copies manually)
+  // Lottery: generate one lucky number per item unit immediately on order
+  // creation (no Twilio — admin or delivery staff copies manually).
   try {
-    // Direct/relay orders normally carry the phone on the order itself, but
-    // web orders may reference a customer record instead. Do not silently
-    // skip those orders: the lottery reconciliation endpoint can repair old
-    // records, but new orders should enter the session immediately.
-    const linkedCustomer = order.customerId
-      ? (await db.select({ phone: customersTable.phone, name: customersTable.name }).from(customersTable).where(eq(customersTable.id, order.customerId)))[0]
-      : null;
-    const phone = order.customerPhoneDirect ?? linkedCustomer?.phone ?? null;
-    if (phone) {
-      const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" });
-      let luckyNumber = 0;
-      let attempts = 0;
-      do {
-        luckyNumber = Math.floor(100000 + Math.random() * 900000);
-        const existing = await db.select({ id: lotteryEntriesTable.id })
-          .from(lotteryEntriesTable)
-          .where(and(
-            eq(lotteryEntriesTable.branchId, order.branchId),
-            eq(lotteryEntriesTable.drawDate, today),
-            eq(lotteryEntriesTable.luckyNumber, luckyNumber)
-          ));
-        if (!existing.length) break;
-        attempts++;
-      } while (attempts < 10);
-
-      // Safety: if still duplicate after 10 attempts, skip entry rather than insert a duplicate
-      if (attempts >= 10) {
-        console.warn(`[Lottery] Could not generate unique lucky number for order ${order.id} after 10 attempts — skipping`);
-      } else {
-        const [entry] = await db.insert(lotteryEntriesTable).values({
-          branchId: order.branchId,
-          orderId: order.id,
-          customerPhone: phone,
-          customerName: order.customerNameDirect ?? linkedCustomer?.name ?? null,
-          luckyNumber,
-          drawDate: today,
-          luckyNumberSent: false,
-        }).returning();
-
-        // Notify admin lottery panel in real time — no Twilio send
-        tryEmitTo(`branch:${order.branchId}:admin`, "lottery:new_entry", {
-          id: entry.id,
-          orderId: order.id,
-          orderCode: order.orderCode,
-          branchId: order.branchId,
-          customerName: order.customerNameDirect ?? linkedCustomer?.name ?? null,
-          customerPhone: phone,
-          luckyNumber,
-          drawDate: today,
-          manuallySent: false,
-          createdAt: entry.createdAt.toISOString(),
-        });
-      }
+    const lotteryResult = await ensureLotteryEntriesForOrder(order, uaeDate(order.createdAt));
+    // Notify admin lottery panel in real time — no Twilio send. Emit every
+    // ticket created for a multi-unit order.
+    for (const entry of lotteryResult.created) {
+      tryEmitTo(`branch:${order.branchId}:admin`, "lottery:new_entry", {
+        id: entry.id,
+        orderId: order.id,
+        orderCode: order.orderCode,
+        branchId: order.branchId,
+        customerName: entry.customerName,
+        customerPhone: entry.customerPhone,
+        luckyNumber: entry.luckyNumber,
+        drawDate: entry.drawDate,
+        manuallySent: false,
+        createdAt: entry.createdAt.toISOString(),
+      });
     }
   } catch (lotteryErr) {
     console.error("[Lottery trigger error]", lotteryErr);
@@ -470,6 +435,30 @@ router.get("/delivery/queue", authenticate, requireRole(...DELIVERY_ROLES), asyn
     itemsByOrder.get(i.orderId)!.push(i);
   }
   const lotteryByOrder = new Map<number, typeof allLotteryEntries>();
+  for (const entry of allLotteryEntries) {
+    if (!lotteryByOrder.has(entry.orderId)) lotteryByOrder.set(entry.orderId, []);
+    lotteryByOrder.get(entry.orderId)!.push(entry);
+  }
+
+  // Repair entries missed during order creation before returning the queue.
+  // This makes the delivery portal self-healing for legacy orders and
+  // transient lottery-generation failures.
+  await Promise.all(
+    sliced.map(async (order) => {
+      const result = await ensureLotteryEntriesForOrder(order, uaeDate(order.createdAt));
+      if (result.created.length) {
+        for (const entry of result.created) {
+          allLotteryEntries.push({
+            id: entry.id,
+            orderId: entry.orderId,
+            luckyNumber: entry.luckyNumber,
+            drawDate: entry.drawDate,
+          });
+        }
+      }
+    }),
+  );
+  lotteryByOrder.clear();
   for (const entry of allLotteryEntries) {
     if (!lotteryByOrder.has(entry.orderId)) lotteryByOrder.set(entry.orderId, []);
     lotteryByOrder.get(entry.orderId)!.push(entry);

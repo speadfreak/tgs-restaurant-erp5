@@ -13,6 +13,7 @@ import {
 import { sendWhatsAppMessage } from "../lib/twilio";
 import { authenticate, requireRole, ADMIN_ROLES } from "../middlewares/auth";
 import { loadLotteryWinnerHistory, selectFairWinners, uaeDate as getUaeDate } from "../lib/lottery-selection";
+import { ensureLotteryEntriesForOrder } from "../lib/lottery-entries";
 
 const router: Router = Router();
 router.use("/lottery", authenticate, requireRole(...ADMIN_ROLES));
@@ -33,57 +34,14 @@ function orderCreatedOnUaeDate(createdAt: Date, date: string): boolean {
   return uaeDate(createdAt) === date;
 }
 
-async function createEntryForOrder(
-  order: typeof ordersTable.$inferSelect,
-  drawDate: string,
-): Promise<{ entry: typeof lotteryEntriesTable.$inferSelect | null; created: boolean; reason?: string }> {
-  if (order.status === "cancelled") return { entry: null, created: false, reason: "Order is cancelled" };
-
-  const existing = (await db.select().from(lotteryEntriesTable).where(
-    and(eq(lotteryEntriesTable.orderId, order.id), eq(lotteryEntriesTable.drawDate, drawDate))
-  ))[0];
-  if (existing) return { entry: existing, created: false, reason: "Already in session" };
-
-  const customer = order.customerId
-    ? (await db.select({ phone: customersTable.phone, name: customersTable.name }).from(customersTable).where(eq(customersTable.id, order.customerId)))[0]
-    : null;
-  const phone = order.customerPhoneDirect ?? customer?.phone ?? null;
-  if (!phone) return { entry: null, created: false, reason: "Order has no customer phone number" };
-
-  let luckyNumber = 0;
-  for (let attempt = 0; attempt < 20; attempt++) {
-    luckyNumber = Math.floor(100000 + Math.random() * 900000);
-    const collision = await db.select({ id: lotteryEntriesTable.id }).from(lotteryEntriesTable).where(
-      and(
-        eq(lotteryEntriesTable.branchId, order.branchId),
-        eq(lotteryEntriesTable.drawDate, drawDate),
-        eq(lotteryEntriesTable.luckyNumber, luckyNumber),
-      )
-    );
-    if (!collision.length) break;
-    if (attempt === 19) return { entry: null, created: false, reason: "Could not generate a unique lucky number" };
-  }
-
-  const [entry] = await db.insert(lotteryEntriesTable).values({
-    branchId: order.branchId,
-    orderId: order.id,
-    customerPhone: phone,
-    customerName: order.customerNameDirect ?? customer?.name ?? null,
-    luckyNumber,
-    drawDate,
-    luckyNumberSent: false,
-  }).returning();
-  return { entry, created: true };
-}
-
 async function syncLotteryEntries(branchId: number, drawDate: string) {
   const orders = await db.select().from(ordersTable).where(eq(ordersTable.branchId, branchId));
   const candidates = orders.filter(o => o.status !== "cancelled" && orderCreatedOnUaeDate(o.createdAt, drawDate));
-  const results = await Promise.all(candidates.map(order => createEntryForOrder(order, drawDate)));
+  const results = await Promise.all(candidates.map(order => ensureLotteryEntriesForOrder(order, drawDate)));
   return {
     scanned: candidates.length,
-    created: results.filter(r => r.created).map(r => r.entry),
-    skipped: results.flatMap((r, index) => r.created ? [] : [{ reason: r.reason, orderId: candidates[index]?.id }]),
+    created: results.flatMap(r => r.created),
+    skipped: results.flatMap((r, index) => r.created.length === 0 ? [{ reason: r.reason, orderId: candidates[index]?.id }] : []),
   };
 }
 
@@ -184,8 +142,10 @@ router.post("/lottery/entries/manual", async (req, res): Promise<void> => {
       errors.push({ value, reason: "Order not found in this branch" });
       continue;
     }
-    const result = await createEntryForOrder(order, drawDate);
-    if (result.created && result.entry) added.push({ ...result.entry, orderCode: order.orderCode });
+    const result = await ensureLotteryEntriesForOrder(order, drawDate);
+    if (result.created.length) {
+      added.push(...result.created.map(entry => ({ ...entry, orderCode: order.orderCode })));
+    }
     else if (result.reason === "Already in session") existing.push(order.orderCode);
     else errors.push({ value, reason: result.reason ?? "Could not add order" });
   }
