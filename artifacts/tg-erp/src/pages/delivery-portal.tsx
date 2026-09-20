@@ -1,3 +1,135 @@
+import { useEffect, useState, useCallback, useRef } from "react";
+import { useAuth } from "@/lib/auth";
+import { useLocation } from "wouter";
+import { useSocket } from "@/hooks/use-socket";
+import { useAttendance } from "@/hooks/use-attendance";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { useToast } from "@/hooks/use-toast";
+import {
+  Truck, Plus, Phone, MapPin, LogOut, Wifi, WifiOff,
+  CheckCircle2, XCircle, Package, Bell, ExternalLink, BarChart2, Radio,
+  AlertCircle, Copy, Star, Trash2, History,
+} from "lucide-react";
+import { MyTasks } from "@/components/my-tasks";
+import { getApiBase } from "@/lib/api-base";
+import { isTodayUAE, isYesterdayUAE } from "@/lib/date-uae";
+
+interface MenuItem {
+  id: number; nameEn: string; nameAm: string; priceAed: number; available: boolean; categoryId: number; photoUrl?: string | null;
+}
+interface Category { id: number; nameEn: string }
+interface CartItem { menuItemId: number; name: string; quantity: number; unitPrice: number }
+interface LotteryTicket {
+  id: number;
+  orderId: number;
+  orderCode: string;
+  luckyNumber: number;
+  drawDate: string;
+  orderCreatedAt: string;
+}
+interface DeliveryOrder {
+  id: number; orderCode: string; status: string; channel: string;
+  customerName: string | null; customerPhone: string | null; deliveryAddress: string | null;
+  relayedByUserId: number | null; assignedDeliveryUserId: number | null;
+  staffName: string | null; claimedAt: string | null;
+  markedReadyAt: string | null;
+  luckyNumber: number | null;
+  lotteryTickets: LotteryTicket[];
+  items: { menuItemName: string | null; quantity: number }[];
+  totalAed: number; createdAt: string; updatedAt?: string;
+}
+
+const BASE = getApiBase();
+function getToken() { return localStorage.getItem("tg_erp_token"); }
+
+async function apiFetch(path: string, method = "GET", body?: unknown) {
+  const res = await fetch(`${BASE}${path}`, {
+    method,
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${getToken() ?? ""}` },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => res.status.toString());
+    throw new Error(errText || String(res.status));
+  }
+  return res.json();
+}
+
+function playReadyAlert() {
+  try {
+    const ctx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+    const freqs = [523, 659, 784, 1047]; let t = ctx.currentTime;
+    freqs.forEach(freq => {
+      const osc = ctx.createOscillator(); const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.frequency.value = freq; osc.type = "sine";
+      gain.gain.setValueAtTime(0.3, t); gain.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+      osc.start(t); osc.stop(t + 0.2); t += 0.22;
+    });
+  } catch { /* ignore */ }
+}
+
+function StatusPill({ status }: { status: string }) {
+  const map: Record<string, string> = {
+    ready: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30",
+    assigned: "bg-amber-500/20 text-amber-400 border-amber-500/30",
+    out_for_delivery: "bg-blue-500/20 text-blue-400 border-blue-500/30",
+    delivered: "bg-zinc-500/20 text-zinc-400 border-zinc-500/30",
+    failed: "bg-red-500/20 text-red-400 border-red-500/30",
+  };
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[11px] font-semibold capitalize ${map[status] ?? "border-zinc-700 text-zinc-400"}`}>
+      {status.replace(/_/g, " ")}
+    </span>
+  );
+}
+
+const EMPTY_RELAY = { customerName: "", customerPhone: "", deliveryAddress: "" };
+
+interface LotteryCustomerGroup {
+  key: string;
+  name: string | null;
+  phone: string | null;
+  tickets: LotteryTicket[];
+}
+
+function normalizeCustomerPhone(phone: string | null): string {
+  return (phone ?? "").replace(/^whatsapp:/i, "").replace(/[^\d+]/g, "");
+}
+
+function ticketsForOrder(order: DeliveryOrder): LotteryTicket[] {
+  if (order.lotteryTickets?.length) return order.lotteryTickets;
+  if (order.luckyNumber === null || order.luckyNumber === undefined) return [];
+  return [{
+    id: order.id,
+    orderId: order.id,
+    orderCode: order.orderCode,
+    luckyNumber: order.luckyNumber,
+    drawDate: order.createdAt.slice(0, 10),
+    orderCreatedAt: order.createdAt,
+  }];
+}
+
+function groupLotteryTickets(orders: DeliveryOrder[]): LotteryCustomerGroup[] {
+  const groups = new Map<string, LotteryCustomerGroup>();
+  for (const order of orders) {
+    const tickets = ticketsForOrder(order);
+    if (tickets.length === 0) continue;
+    const phone = order.customerPhone;
+    const key = normalizeCustomerPhone(phone) || `order:${order.id}`;
+    const existing = groups.get(key) ?? {
+      key,
+      name: order.customerName,
+      phone,
+      tickets: [],
+    };
+    const knownTicketIds = new Set(existing.tickets.map(ticket => ticket.id));
+    for (const ticket of tickets) {
+      if (!knownTicketIds.has(ticket.id)) existing.tickets.push(ticket);
+    }
     groups.set(key, existing);
   }
   const sortedGroups = Array.from(groups.values());
