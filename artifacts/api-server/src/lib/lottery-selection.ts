@@ -5,7 +5,9 @@ import {
   lotteryDrawsTable,
   lotteryEntriesTable,
   lotteryWinnersTable,
+  ordersTable,
 } from "@workspace/db";
+import { inArray } from "drizzle-orm";
 
 const FAIR_SELECTION_VERSION = "fair-ticket-volume-v3";
 
@@ -47,6 +49,25 @@ export async function loadLotteryWinnerHistory(branchId: number): Promise<Lotter
       eq(lotteryDrawsTable.branchId, branchId),
       eq(lotteryDrawsTable.status, "completed"),
     ));
+}
+
+/**
+ * Cancelled orders must never participate in a draw, even if an older
+ * lottery entry survived the cancellation cleanup.
+ */
+export async function filterCancelledLotteryEntries<T extends { orderId: number }>(entries: T[]): Promise<T[]> {
+  if (entries.length === 0) return entries;
+
+  const orderIds = [...new Set(entries.map(entry => entry.orderId))];
+  const orders = await db
+    .select({ id: ordersTable.id, status: ordersTable.status })
+    .from(ordersTable)
+    .where(inArray(ordersTable.id, orderIds));
+  const cancelledOrderIds = new Set(
+    orders.filter(order => order.status === "cancelled").map(order => order.id),
+  );
+
+  return entries.filter(entry => !cancelledOrderIds.has(entry.orderId));
 }
 
 function customerKey(phone: string): string {

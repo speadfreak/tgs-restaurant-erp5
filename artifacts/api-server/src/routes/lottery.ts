@@ -12,7 +12,12 @@ import {
 } from "@workspace/db";
 import { sendWhatsAppMessage } from "../lib/twilio";
 import { authenticate, requireRole, ADMIN_ROLES } from "../middlewares/auth";
-import { loadLotteryWinnerHistory, selectFairWinners, uaeDate as getUaeDate } from "../lib/lottery-selection";
+import {
+  filterCancelledLotteryEntries,
+  loadLotteryWinnerHistory,
+  selectFairWinners,
+  uaeDate as getUaeDate,
+} from "../lib/lottery-selection";
 import { ensureLotteryEntriesForOrder } from "../lib/lottery-entries";
 
 const router: Router = Router();
@@ -59,6 +64,7 @@ router.get("/lottery/entries", async (req, res): Promise<void> => {
   let rows = await db.select().from(lotteryEntriesTable).orderBy(desc(lotteryEntriesTable.createdAt));
   if (branchId) rows = rows.filter(e => e.branchId === branchId);
   if (date) rows = rows.filter(e => e.drawDate === date);
+  rows = await filterCancelledLotteryEntries(rows);
 
   // pendingOnly: exclude entries whose drawDate has a completed draw for this branch
   if (pendingOnly && branchId) {
@@ -159,6 +165,7 @@ router.get("/lottery/entries/by-phone", async (req, res): Promise<void> => {
   if (!phone) { res.status(400).json({ error: "phone required" }); return; }
   const rows = await db.select({
     id: lotteryEntriesTable.id,
+    orderId: lotteryEntriesTable.orderId,
     luckyNumber: lotteryEntriesTable.luckyNumber,
     drawDate: lotteryEntriesTable.drawDate,
     isWinner: lotteryEntriesTable.isWinner,
@@ -168,7 +175,8 @@ router.get("/lottery/entries/by-phone", async (req, res): Promise<void> => {
   }).from(lotteryEntriesTable)
     .where(eq(lotteryEntriesTable.customerPhone, phone))
     .orderBy(desc(lotteryEntriesTable.drawDate));
-  res.json(rows);
+  const activeRows = await filterCancelledLotteryEntries(rows);
+  res.json(activeRows);
 });
 
 // PATCH /lottery/entries/:id/manually-sent — toggle manually_sent flag
@@ -256,9 +264,10 @@ router.post("/lottery/draws", async (req, res): Promise<void> => {
   }
 
   // Count eligible entries for this date
-  const entries = await db.select().from(lotteryEntriesTable).where(
+  const scheduledEntries = await db.select().from(lotteryEntriesTable).where(
     and(eq(lotteryEntriesTable.branchId, branchId), eq(lotteryEntriesTable.drawDate, date))
   );
+  const entries = await filterCancelledLotteryEntries(scheduledEntries);
 
   const [settings] = await db.select().from(lotterySettingsTable).where(eq(lotterySettingsTable.branchId, branchId));
   const prizeConfig = settings?.prizeConfig ?? '[{"tier":"First Prize","count":1,"prize":"Free Meal"}]';
@@ -297,12 +306,7 @@ router.post("/lottery/draws/:id/run", async (req, res): Promise<void> => {
       )
     )
   );
-  const candidateOrderIds = [...new Set(candidateEntries.map(entry => entry.orderId))];
-  const candidateOrders = candidateOrderIds.length
-    ? await db.select({ id: ordersTable.id, status: ordersTable.status }).from(ordersTable)
-    : [];
-  const cancelledOrderIds = new Set(candidateOrders.filter(order => order.status === "cancelled").map(order => order.id));
-  const entries = candidateEntries.filter(entry => !cancelledOrderIds.has(entry.orderId));
+  const entries = await filterCancelledLotteryEntries(candidateEntries);
 
   if (entries.length === 0) {
     res.status(400).json({ error: "No eligible entries for this draw — mark at least one number as sent first" }); return;

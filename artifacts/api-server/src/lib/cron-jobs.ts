@@ -9,7 +9,12 @@ import { eq, and, or, sql } from "drizzle-orm";
 import { sendWhatsAppMessage } from "./twilio";
 import { getSetting } from "./settings";
 import { runWeeklyBackup } from "./weekly-backup";
-import { loadLotteryWinnerHistory, selectFairWinners, uaeDate } from "./lottery-selection";
+import {
+  filterCancelledLotteryEntries,
+  loadLotteryWinnerHistory,
+  selectFairWinners,
+  uaeDate,
+} from "./lottery-selection";
 
 const DEFAULT_LUCKY_NUMBER_TEMPLATE = "🎉 ስለደንበኝነትዎ እናመሰግናለን! | Thank You for Choosing Us!\n\n🎟️ የዕጣ ቁጥርዎ | Your Lucky Number: {{lucky_number}}\n\n📌 እባክዎ ቁጥሩን ይያዙት። | Please keep this number for our upcoming prize draw.";
 
@@ -57,14 +62,7 @@ export async function runDailyLotteryDrawForBranch(branchId: number) {
           eq(lotteryEntriesTable.manuallySent, true),
         ),
       ));
-    const candidateOrderIds = [...new Set(candidateEntries.map(entry => entry.orderId))];
-    const candidateOrders = candidateOrderIds.length
-      ? await db.select({ id: ordersTable.id, status: ordersTable.status }).from(ordersTable)
-      : [];
-    const cancelledOrderIds = new Set(
-      candidateOrders.filter(order => order.status === "cancelled").map(order => order.id),
-    );
-    const entries = candidateEntries.filter(entry => !cancelledOrderIds.has(entry.orderId));
+    const entries = await filterCancelledLotteryEntries(candidateEntries);
     if (entries.length === 0) {
       await logJob("daily_lottery_draw", true, `Branch ${branchId}: no entries`);
       return;
@@ -131,8 +129,9 @@ export async function runDailyLotteryDrawForBranch(branchId: number) {
 export async function retryLuckyNumbers() {
   try {
     const today = new Date().toISOString().split("T")[0];
-    const pending = await db.select().from(lotteryEntriesTable)
+    const pendingEntries = await db.select().from(lotteryEntriesTable)
       .where(and(eq(lotteryEntriesTable.luckyNumberSent, false), eq(lotteryEntriesTable.drawDate, today)));
+    const pending = await filterCancelledLotteryEntries(pendingEntries);
     const toRetry = pending.filter(e => e.sendAttempts < 3);
     let sent = 0;
     for (const entry of toRetry) {

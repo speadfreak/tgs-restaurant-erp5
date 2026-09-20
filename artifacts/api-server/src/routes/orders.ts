@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, desc, and, or, inArray } from "drizzle-orm";
+import { eq, desc, asc, and, or, inArray } from "drizzle-orm";
 import { db, ordersTable, orderItemsTable, customersTable, branchesTable, menuItemsTable, orderStatusHistoryTable, usersTable, lotteryEntriesTable, lotterySettingsTable, commissionsTable, settingsTable, deliveriesTable } from "@workspace/db";
 import { sendTeamsNotification } from "../lib/teams";
 import { sendWhatsAppMessage } from "../lib/twilio";
@@ -426,7 +426,7 @@ router.get("/delivery/queue", authenticate, requireRole(...DELIVERY_ROLES), asyn
         orderId: lotteryEntriesTable.orderId,
         luckyNumber: lotteryEntriesTable.luckyNumber,
         drawDate: lotteryEntriesTable.drawDate,
-      }).from(lotteryEntriesTable).where(inArray(lotteryEntriesTable.orderId, orderIds))
+      }).from(lotteryEntriesTable).where(inArray(lotteryEntriesTable.orderId, orderIds)).orderBy(asc(lotteryEntriesTable.id))
       : Promise.resolve([] as Array<{ id: number; orderId: number; luckyNumber: number; drawDate: string }>),
   ]);
   const itemsByOrder = new Map<number, typeof allItems>();
@@ -493,6 +493,7 @@ router.get("/delivery/queue", authenticate, requireRole(...DELIVERY_ROLES), asyn
         orderCode: order.orderCode,
         luckyNumber: entry.luckyNumber,
         drawDate: entry.drawDate,
+         orderCreatedAt: order.createdAt.toISOString(),
       })),
       items: items.map(i => ({ menuItemName: nameMap.get(i.menuItemId) ?? null, quantity: i.quantity })),
       totalAed: Number(order.totalAed),
