@@ -29,13 +29,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setAuthTokenGetter(() => localStorage.getItem("tg_erp_token"));
   }, []);
 
-  const { data: user, isLoading, refetch } = useGetMe({
+  const { data: user, isLoading, isError, error, refetch } = useGetMe({
     query: {
       enabled: !!token,
       retry: false,
       queryKey: getGetMeQueryKey(),
     }
   });
+
+  // An expired token or an unavailable auth/database endpoint must not leave
+  // protected portals stuck on their full-screen loading state forever.
+  // Clear the local session and return to login; the login request will then
+  // show the actual server error if the database is still unavailable.
+  useEffect(() => {
+    if (!token || isLoading || !isError) return;
+    localStorage.removeItem("tg_erp_token");
+    setTokenState(null);
+    setAuthTokenGetter(() => null);
+    if (window.location.pathname !== "/login") {
+      setLocation("/login");
+    }
+  }, [token, isLoading, isError, error, setLocation]);
 
   useEffect(() => {
     if (!token) {

@@ -23,7 +23,18 @@ const ssl =
     ? { rejectUnauthorized: false }
     : false;
 
-export const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl });
+export const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl,
+  // Never let an unreachable external Postgres endpoint hold every request
+  // open indefinitely. This is especially important for Render + Supabase
+  // when a direct IPv6-only database endpoint is used instead of the pooler.
+  connectionTimeoutMillis: 8_000,
+  query_timeout: 15_000,
+  idleTimeoutMillis: 30_000,
+  max: 10,
+  keepAlive: true,
+});
 export const db = drizzle(pool, { schema });
 
 export * from "./schema";
