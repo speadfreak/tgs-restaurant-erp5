@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useListOrders, useUpdateOrderStatus } from "@workspace/api-client-react";
+import { getListOrdersQueryKey, useListOrders } from "@workspace/api-client-react";
 import { useAuth } from "@/lib/auth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -16,9 +16,22 @@ export default function Orders() {
   const { user } = useAuth();
   const [statusFilter, setStatusFilter] = useState<string>("all");
 
-  const { data: orders, isLoading } = useListOrders({ 
+  const orderParams = {
     branchId: user?.branchId ?? undefined,
     status: statusFilter === "all" ? undefined : statusFilter
+  };
+  const {
+    data: orders,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useListOrders(orderParams, {
+    query: {
+      queryKey: getListOrdersQueryKey(orderParams),
+      refetchInterval: 10_000,
+      refetchOnWindowFocus: true,
+    },
   });
 
   return (
@@ -50,6 +63,7 @@ export default function Orders() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Statuses</SelectItem>
+                  <SelectItem value="pending_acceptance">Awaiting Acceptance</SelectItem>
                   <SelectItem value="pending">Pending</SelectItem>
                   <SelectItem value="confirmed">Confirmed</SelectItem>
                   <SelectItem value="preparing">Preparing</SelectItem>
@@ -65,6 +79,14 @@ export default function Orders() {
         <CardContent>
           {isLoading ? (
             <div className="h-64 flex items-center justify-center text-muted-foreground">Loading orders...</div>
+          ) : isError ? (
+            <div className="py-12 flex flex-col items-center gap-3 text-center" role="alert">
+              <p className="font-medium">Unable to load orders</p>
+              <p className="text-sm text-muted-foreground">
+                {error instanceof Error ? error.message : "The orders request failed. Please try again."}
+              </p>
+              <Button variant="outline" onClick={() => void refetch()}>Retry</Button>
+            </div>
           ) : orders && orders.length > 0 ? (
             <div className="rounded-md border">
               <Table>
@@ -112,6 +134,7 @@ export default function Orders() {
 function getStatusColor(status: string) {
   switch (status) {
     case 'pending': return 'bg-gray-500/20 text-gray-500 border-gray-500/50';
+    case 'pending_acceptance': return 'bg-amber-500/20 text-amber-500 border-amber-500/50';
     case 'confirmed': return 'bg-blue-500/20 text-blue-500 border-blue-500/50';
     case 'preparing': return 'bg-yellow-500/20 text-yellow-500 border-yellow-500/50';
     case 'ready': return 'bg-cyan-500/20 text-cyan-500 border-cyan-500/50';
