@@ -105,7 +105,7 @@ router.get("/orders", authenticate, requireRole(...ADMIN_ROLES, ...ORDER_INTAKE_
   if (q.data.status) rows = rows.filter(o => o.status === q.data.status);
   if (q.data.date) rows = rows.filter(o => o.createdAt.toISOString().startsWith(q.data.date!));
   const results = await Promise.all(rows.slice(0, 50).map(buildOrderResponse));
-  res.json(results); // bypass strict Zod parse — pending_acceptance is a valid DB status
+  res.json(ListOrdersResponse.parse(results));
 });
 
 router.post("/orders", authenticateOptional, async (req, res): Promise<void> => {
@@ -179,7 +179,7 @@ router.post("/orders", authenticateOptional, async (req, res): Promise<void> => 
     console.error("[Lottery trigger error]", lotteryErr);
   }
 
-  res.status(201).json(result); // skip strict Zod parse — pending_acceptance is valid but not in generated enum
+  res.status(201).json(CreateOrderResponse.parse(result));
 });
 
 router.get("/orders/by-code/:code", async (req, res): Promise<void> => {

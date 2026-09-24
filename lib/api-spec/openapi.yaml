@@ -1750,7 +1750,7 @@ components:
           enum: [whatsapp, whatsapp_relay, whatsapp_voice, webapp, manual]
         status:
           type: string
-          enum: [pending, confirmed, preparing, ready, out_for_delivery, delivered, cancelled]
+          enum: [pending_acceptance, pending, confirmed, preparing, ready, out_for_delivery, delivered, cancelled]
         totalAed:
           type: number
         paymentMethod:
@@ -1822,7 +1822,7 @@ components:
       properties:
         status:
           type: string
-          enum: [pending, confirmed, preparing, ready, out_for_delivery, delivered, cancelled]
+          enum: [pending_acceptance, pending, confirmed, preparing, ready, out_for_delivery, delivered, cancelled]
 
     KitchenTicket:
       type: object

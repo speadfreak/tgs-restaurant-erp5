@@ -196,6 +196,7 @@ export type OrderStatus = typeof OrderStatus[keyof typeof OrderStatus];
 
 
 export const OrderStatus = {
+  pending_acceptance: 'pending_acceptance',
   pending: 'pending',
   confirmed: 'confirmed',
   preparing: 'preparing',
@@ -270,6 +271,7 @@ export type OrderStatusUpdateStatus = typeof OrderStatusUpdateStatus[keyof typeo
 
 
 export const OrderStatusUpdateStatus = {
+  pending_acceptance: 'pending_acceptance',
   pending: 'pending',
   confirmed: 'confirmed',
   preparing: 'preparing',

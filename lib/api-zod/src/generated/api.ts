@@ -468,7 +468,7 @@ export const ListOrdersResponseItem = zod.object({
   "customerName": zod.string().nullish(),
   "customerPhone": zod.string().nullish(),
   "channel": zod.enum(['whatsapp', 'whatsapp_relay', 'whatsapp_voice', 'webapp', 'manual']),
-  "status": zod.enum(['pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'cancelled']),
+  "status": zod.enum(['pending_acceptance', 'pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'cancelled']),
   "totalAed": zod.number(),
   "paymentMethod": zod.string().nullish(),
   "items": zod.array(zod.object({
@@ -509,7 +509,7 @@ export const CreateOrderResponse = zod.object({
   "customerName": zod.string().nullish(),
   "customerPhone": zod.string().nullish(),
   "channel": zod.enum(['whatsapp', 'whatsapp_relay', 'whatsapp_voice', 'webapp', 'manual']),
-  "status": zod.enum(['pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'cancelled']),
+  "status": zod.enum(['pending_acceptance', 'pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'cancelled']),
   "totalAed": zod.number(),
   "paymentMethod": zod.string().nullish(),
   "items": zod.array(zod.object({
@@ -540,7 +540,7 @@ export const GetOrderResponse = zod.object({
   "customerName": zod.string().nullish(),
   "customerPhone": zod.string().nullish(),
   "channel": zod.enum(['whatsapp', 'whatsapp_relay', 'whatsapp_voice', 'webapp', 'manual']),
-  "status": zod.enum(['pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'cancelled']),
+  "status": zod.enum(['pending_acceptance', 'pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'cancelled']),
   "totalAed": zod.number(),
   "paymentMethod": zod.string().nullish(),
   "items": zod.array(zod.object({
@@ -576,7 +576,7 @@ export const UpdateOrderResponse = zod.object({
   "customerName": zod.string().nullish(),
   "customerPhone": zod.string().nullish(),
   "channel": zod.enum(['whatsapp', 'whatsapp_relay', 'whatsapp_voice', 'webapp', 'manual']),
-  "status": zod.enum(['pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'cancelled']),
+  "status": zod.enum(['pending_acceptance', 'pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'cancelled']),
   "totalAed": zod.number(),
   "paymentMethod": zod.string().nullish(),
   "items": zod.array(zod.object({
@@ -599,7 +599,7 @@ export const UpdateOrderStatusParams = zod.object({
 })
 
 export const UpdateOrderStatusBody = zod.object({
-  "status": zod.enum(['pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'cancelled'])
+  "status": zod.enum(['pending_acceptance', 'pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'cancelled'])
 })
 
 export const UpdateOrderStatusResponse = zod.object({
@@ -611,7 +611,7 @@ export const UpdateOrderStatusResponse = zod.object({
   "customerName": zod.string().nullish(),
   "customerPhone": zod.string().nullish(),
   "channel": zod.enum(['whatsapp', 'whatsapp_relay', 'whatsapp_voice', 'webapp', 'manual']),
-  "status": zod.enum(['pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'cancelled']),
+  "status": zod.enum(['pending_acceptance', 'pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'cancelled']),
   "totalAed": zod.number(),
   "paymentMethod": zod.string().nullish(),
   "items": zod.array(zod.object({
@@ -660,7 +660,7 @@ export const GetOrderByCodeResponse = zod.object({
   "customerName": zod.string().nullish(),
   "customerPhone": zod.string().nullish(),
   "channel": zod.enum(['whatsapp', 'whatsapp_relay', 'whatsapp_voice', 'webapp', 'manual']),
-  "status": zod.enum(['pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'cancelled']),
+  "status": zod.enum(['pending_acceptance', 'pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'cancelled']),
   "totalAed": zod.number(),
   "paymentMethod": zod.string().nullish(),
   "items": zod.array(zod.object({
@@ -718,7 +718,7 @@ export const StartPreparingOrderResponse = zod.object({
   "customerName": zod.string().nullish(),
   "customerPhone": zod.string().nullish(),
   "channel": zod.enum(['whatsapp', 'whatsapp_relay', 'whatsapp_voice', 'webapp', 'manual']),
-  "status": zod.enum(['pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'cancelled']),
+  "status": zod.enum(['pending_acceptance', 'pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'cancelled']),
   "totalAed": zod.number(),
   "paymentMethod": zod.string().nullish(),
   "items": zod.array(zod.object({
@@ -749,7 +749,7 @@ export const MarkOrderReadyResponse = zod.object({
   "customerName": zod.string().nullish(),
   "customerPhone": zod.string().nullish(),
   "channel": zod.enum(['whatsapp', 'whatsapp_relay', 'whatsapp_voice', 'webapp', 'manual']),
-  "status": zod.enum(['pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'cancelled']),
+  "status": zod.enum(['pending_acceptance', 'pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'cancelled']),
   "totalAed": zod.number(),
   "paymentMethod": zod.string().nullish(),
   "items": zod.array(zod.object({
@@ -1521,7 +1521,7 @@ export const GetLiveOrdersResponseItem = zod.object({
   "customerName": zod.string().nullish(),
   "customerPhone": zod.string().nullish(),
   "channel": zod.enum(['whatsapp', 'whatsapp_relay', 'whatsapp_voice', 'webapp', 'manual']),
-  "status": zod.enum(['pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'cancelled']),
+  "status": zod.enum(['pending_acceptance', 'pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'cancelled']),
   "totalAed": zod.number(),
   "paymentMethod": zod.string().nullish(),
   "items": zod.array(zod.object({
