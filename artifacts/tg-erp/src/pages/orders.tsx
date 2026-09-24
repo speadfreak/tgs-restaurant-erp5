@@ -14,6 +14,7 @@ import { Empty, EmptyTitle, EmptyDescription } from "@/components/ui/empty";
 
 export default function Orders() {
   const { user } = useAuth();
+  const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
 
   const orderParams = {
@@ -32,6 +33,14 @@ export default function Orders() {
       refetchInterval: 10_000,
       refetchOnWindowFocus: true,
     },
+  });
+
+  const normalizedSearchTerm = searchTerm.trim().toLowerCase();
+  const visibleOrders = orders?.filter((order) => {
+    if (!normalizedSearchTerm) return true;
+    return [order.orderCode, order.customerName, order.channel]
+      .filter((value): value is string => Boolean(value))
+      .some((value) => value.toLowerCase().includes(normalizedSearchTerm));
   });
 
   return (
@@ -55,7 +64,12 @@ export default function Orders() {
             <div className="flex items-center gap-4 w-full sm:w-auto">
               <div className="relative flex-1 sm:w-64">
                 <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input placeholder="Search orders..." className="pl-9" />
+                <Input
+                  placeholder="Search orders..."
+                  className="pl-9"
+                  value={searchTerm}
+                  onChange={(event) => setSearchTerm(event.target.value)}
+                />
               </div>
               <Select value={statusFilter} onValueChange={setStatusFilter}>
                 <SelectTrigger className="w-[180px]">
@@ -68,9 +82,12 @@ export default function Orders() {
                   <SelectItem value="confirmed">Confirmed</SelectItem>
                   <SelectItem value="preparing">Preparing</SelectItem>
                   <SelectItem value="ready">Ready</SelectItem>
+                  <SelectItem value="assigned">Assigned</SelectItem>
                   <SelectItem value="out_for_delivery">Out for Delivery</SelectItem>
                   <SelectItem value="delivered">Delivered</SelectItem>
+                  <SelectItem value="failed">Failed</SelectItem>
                   <SelectItem value="cancelled">Cancelled</SelectItem>
+                  <SelectItem value="dismissed">Dismissed</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -87,7 +104,7 @@ export default function Orders() {
               </p>
               <Button variant="outline" onClick={() => void refetch()}>Retry</Button>
             </div>
-          ) : orders && orders.length > 0 ? (
+          ) : visibleOrders && visibleOrders.length > 0 ? (
             <div className="rounded-md border">
               <Table>
                 <TableHeader>
@@ -102,7 +119,7 @@ export default function Orders() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {orders.map((order) => (
+                  {visibleOrders.map((order) => (
                     <TableRow key={order.id}>
                       <TableCell className="font-mono font-medium">{order.orderCode}</TableCell>
                       <TableCell>{fmtUAE(order.createdAt)}</TableCell>
@@ -123,7 +140,14 @@ export default function Orders() {
               </Table>
             </div>
           ) : (
-            <Empty><EmptyTitle>No orders found</EmptyTitle><EmptyDescription>Try adjusting your filters.</EmptyDescription></Empty>
+            <Empty>
+              <EmptyTitle>No orders found</EmptyTitle>
+              <EmptyDescription>
+                {orders && orders.length > 0
+                  ? "Try adjusting your search or filters."
+                  : "Orders will appear here once they are created."}
+              </EmptyDescription>
+            </Empty>
           )}
         </CardContent>
       </Card>
@@ -138,9 +162,12 @@ function getStatusColor(status: string) {
     case 'confirmed': return 'bg-blue-500/20 text-blue-500 border-blue-500/50';
     case 'preparing': return 'bg-yellow-500/20 text-yellow-500 border-yellow-500/50';
     case 'ready': return 'bg-cyan-500/20 text-cyan-500 border-cyan-500/50';
+    case 'assigned': return 'bg-indigo-500/20 text-indigo-500 border-indigo-500/50';
     case 'out_for_delivery': return 'bg-purple-500/20 text-purple-500 border-purple-500/50';
     case 'delivered': return 'bg-green-500/20 text-green-500 border-green-500/50';
+    case 'failed': return 'bg-red-500/20 text-red-500 border-red-500/50';
     case 'cancelled': return 'bg-red-500/20 text-red-500 border-red-500/50';
+    case 'dismissed': return 'bg-zinc-500/20 text-zinc-500 border-zinc-500/50';
     default: return 'bg-gray-500/20 text-gray-500 border-gray-500/50';
   }
 }

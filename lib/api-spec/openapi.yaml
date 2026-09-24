@@ -1747,10 +1747,10 @@ components:
           type: ["string", "null"]
         channel:
           type: string
-          enum: [whatsapp, whatsapp_relay, whatsapp_voice, webapp, manual]
+          description: The persisted order channel. Older orders may contain legacy channel values.
         status:
           type: string
-          enum: [pending_acceptance, pending, confirmed, preparing, ready, out_for_delivery, delivered, cancelled]
+          description: The persisted order status. This remains open so historical orders cannot make the list endpoint fail validation.
         totalAed:
           type: number
         paymentMethod:
@@ -1822,7 +1822,7 @@ components:
       properties:
         status:
           type: string
-          enum: [pending_acceptance, pending, confirmed, preparing, ready, out_for_delivery, delivered, cancelled]
+          enum: [pending_acceptance, pending, confirmed, preparing, ready, assigned, out_for_delivery, delivered, failed, cancelled, dismissed]
 
     KitchenTicket:
       type: object

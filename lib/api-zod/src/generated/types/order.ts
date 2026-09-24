@@ -21,8 +21,8 @@ export interface Order {
   customerName?: string | null;
   /** @nullable */
   customerPhone?: string | null;
-  channel: OrderChannel;
-  status: OrderStatus;
+  channel: string;
+  status: string;
   totalAed: number;
   /** @nullable */
   paymentMethod?: string | null;

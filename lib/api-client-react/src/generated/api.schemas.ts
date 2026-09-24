@@ -201,9 +201,12 @@ export const OrderStatus = {
   confirmed: 'confirmed',
   preparing: 'preparing',
   ready: 'ready',
+  assigned: 'assigned',
   out_for_delivery: 'out_for_delivery',
   delivered: 'delivered',
+  failed: 'failed',
   cancelled: 'cancelled',
+  dismissed: 'dismissed',
 } as const;
 
 export interface Order {
@@ -218,8 +221,8 @@ export interface Order {
   customerName?: string | null;
   /** @nullable */
   customerPhone?: string | null;
-  channel: OrderChannel;
-  status: OrderStatus;
+  channel: string;
+  status: string;
   totalAed: number;
   /** @nullable */
   paymentMethod?: string | null;
@@ -276,9 +279,12 @@ export const OrderStatusUpdateStatus = {
   confirmed: 'confirmed',
   preparing: 'preparing',
   ready: 'ready',
+  assigned: 'assigned',
   out_for_delivery: 'out_for_delivery',
   delivered: 'delivered',
+  failed: 'failed',
   cancelled: 'cancelled',
+  dismissed: 'dismissed',
 } as const;
 
 export interface OrderStatusUpdate {
