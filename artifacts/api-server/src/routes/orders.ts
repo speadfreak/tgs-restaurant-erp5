@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, desc, asc, and, or, inArray } from "drizzle-orm";
+import { eq, desc, asc, and, gte, lt, inArray } from "drizzle-orm";
 import { db, ordersTable, orderItemsTable, customersTable, branchesTable, menuItemsTable, orderStatusHistoryTable, usersTable, lotteryEntriesTable, lotterySettingsTable, commissionsTable, settingsTable, deliveriesTable } from "@workspace/db";
 import { sendTeamsNotification } from "../lib/teams";
 import { sendWhatsAppMessage } from "../lib/twilio";
@@ -37,22 +37,30 @@ function genOrderCode() {
   return `${prefix}${ts}${rand}`;
 }
 
-async function buildOrderResponse(order: typeof ordersTable.$inferSelect) {
-  const [items, customer, branch, relayedBy, assignedTo, delivery, lotteryEntry] = await Promise.all([
-    db.select().from(orderItemsTable).where(eq(orderItemsTable.orderId, order.id)),
-    order.customerId ? db.select().from(customersTable).where(eq(customersTable.id, order.customerId)).then(r => r[0] ?? null) : null,
-    db.select().from(branchesTable).where(eq(branchesTable.id, order.branchId)).then(r => r[0] ?? null),
-    order.relayedByUserId ? db.select({ name: usersTable.name }).from(usersTable).where(eq(usersTable.id, order.relayedByUserId)).then(r => r[0] ?? null) : null,
-    order.assignedDeliveryUserId ? db.select({ name: usersTable.name }).from(usersTable).where(eq(usersTable.id, order.assignedDeliveryUserId)).then(r => r[0] ?? null) : null,
-    db.select().from(deliveriesTable).where(eq(deliveriesTable.orderId, order.id)).then(r => r[0] ?? null),
-    db.select({ luckyNumber: lotteryEntriesTable.luckyNumber }).from(lotteryEntriesTable).where(eq(lotteryEntriesTable.orderId, order.id)).then(r => r[0] ?? null),
-  ]);
+type OrderResponseParts = {
+  items: (typeof orderItemsTable.$inferSelect)[];
+  customer: typeof customersTable.$inferSelect | null;
+  branch: typeof branchesTable.$inferSelect | null;
+  relayedBy: { name: string } | null;
+  assignedTo: { name: string } | null;
+  delivery: typeof deliveriesTable.$inferSelect | null;
+  lotteryEntry: { luckyNumber: number } | null;
+  menuItems: Map<number, { nameEn: string }>;
+};
 
-  const nameMap = new Map<number, { nameEn: string; priceAed: string }>();
-  for (const mi of await db.select().from(menuItemsTable)) {
-    nameMap.set(mi.id, { nameEn: mi.nameEn, priceAed: String(mi.priceAed) });
-  }
-
+function mapOrderResponse(
+  order: typeof ordersTable.$inferSelect,
+  {
+    items,
+    customer,
+    branch,
+    relayedBy,
+    assignedTo,
+    delivery,
+    lotteryEntry,
+    menuItems,
+  }: OrderResponseParts,
+) {
   return {
     id: order.id,
     orderCode: order.orderCode,
@@ -80,7 +88,7 @@ async function buildOrderResponse(order: typeof ordersTable.$inferSelect) {
     items: items.map(i => ({
       id: i.id,
       menuItemId: i.menuItemId,
-      menuItemName: nameMap.get(i.menuItemId)?.nameEn ?? null,
+      menuItemName: menuItems.get(i.menuItemId)?.nameEn ?? null,
       quantity: i.quantity,
       unitPrice: Number(i.unitPrice),
       notes: i.notes ?? null,
@@ -88,6 +96,103 @@ async function buildOrderResponse(order: typeof ordersTable.$inferSelect) {
     createdAt: order.createdAt.toISOString(),
     updatedAt: order.updatedAt.toISOString(),
   };
+}
+
+async function buildOrderResponse(order: typeof ordersTable.$inferSelect) {
+  const [items, customer, branch, relayedBy, assignedTo, delivery, lotteryEntry, menuRows] = await Promise.all([
+    db.select().from(orderItemsTable).where(eq(orderItemsTable.orderId, order.id)),
+    order.customerId ? db.select().from(customersTable).where(eq(customersTable.id, order.customerId)).then(r => r[0] ?? null) : null,
+    db.select().from(branchesTable).where(eq(branchesTable.id, order.branchId)).then(r => r[0] ?? null),
+    order.relayedByUserId ? db.select({ name: usersTable.name }).from(usersTable).where(eq(usersTable.id, order.relayedByUserId)).then(r => r[0] ?? null) : null,
+    order.assignedDeliveryUserId ? db.select({ name: usersTable.name }).from(usersTable).where(eq(usersTable.id, order.assignedDeliveryUserId)).then(r => r[0] ?? null) : null,
+    db.select().from(deliveriesTable).where(eq(deliveriesTable.orderId, order.id)).then(r => r[0] ?? null),
+    db.select({ luckyNumber: lotteryEntriesTable.luckyNumber }).from(lotteryEntriesTable).where(eq(lotteryEntriesTable.orderId, order.id)).then(r => r[0] ?? null),
+    db.select({ id: menuItemsTable.id, nameEn: menuItemsTable.nameEn }).from(menuItemsTable),
+  ]);
+
+  return mapOrderResponse(order, {
+    items,
+    customer,
+    branch,
+    relayedBy,
+    assignedTo,
+    delivery,
+    lotteryEntry,
+    menuItems: new Map(menuRows.map(item => [item.id, item])),
+  });
+}
+
+/**
+ * Build the list response without the N+1 query pattern used by the
+ * single-order endpoints. The orders page refreshes frequently, so fetching
+ * related data once per table keeps the request bounded even with 50 orders.
+ */
+async function buildOrderListResponses(orders: (typeof ordersTable.$inferSelect)[]) {
+  if (!orders.length) return [];
+
+  const orderIds = orders.map(order => order.id);
+  const customerIds = [...new Set(orders.flatMap(order => order.customerId ? [order.customerId] : []))];
+  const userIds = [
+    ...new Set(
+      orders.flatMap(order => [
+        ...(order.relayedByUserId ? [order.relayedByUserId] : []),
+        ...(order.assignedDeliveryUserId ? [order.assignedDeliveryUserId] : []),
+      ]),
+    ),
+  ];
+  const [items, customers, branches, users, deliveries, lotteryEntries] = await Promise.all([
+    db.select().from(orderItemsTable).where(inArray(orderItemsTable.orderId, orderIds)),
+    customerIds.length
+      ? db.select().from(customersTable).where(inArray(customersTable.id, customerIds))
+      : Promise.resolve([] as (typeof customersTable.$inferSelect)[]),
+    db.select().from(branchesTable).where(inArray(branchesTable.id, [...new Set(orders.map(order => order.branchId))])),
+    userIds.length
+      ? db.select({ id: usersTable.id, name: usersTable.name }).from(usersTable).where(inArray(usersTable.id, userIds))
+      : Promise.resolve([] as Array<{ id: number; name: string }>),
+    db.select().from(deliveriesTable).where(inArray(deliveriesTable.orderId, orderIds)),
+    db.select({
+      id: lotteryEntriesTable.id,
+      orderId: lotteryEntriesTable.orderId,
+      luckyNumber: lotteryEntriesTable.luckyNumber,
+    }).from(lotteryEntriesTable).where(inArray(lotteryEntriesTable.orderId, orderIds)).orderBy(asc(lotteryEntriesTable.id)),
+  ]);
+
+  const menuItemIdsSet = [...new Set(items.map(item => item.menuItemId))];
+  const menuRows = menuItemIdsSet.length
+    ? await db.select({ id: menuItemsTable.id, nameEn: menuItemsTable.nameEn })
+      .from(menuItemsTable)
+      .where(inArray(menuItemsTable.id, menuItemIdsSet))
+    : [];
+
+  const itemsByOrder = new Map<number, (typeof items)>();
+  for (const item of items) {
+    const orderItems = itemsByOrder.get(item.orderId) ?? [];
+    orderItems.push(item);
+    itemsByOrder.set(item.orderId, orderItems);
+  }
+  const customerById = new Map(customers.map(customer => [customer.id, customer]));
+  const branchById = new Map(branches.map(branch => [branch.id, branch]));
+  const userById = new Map(users.map(user => [user.id, user]));
+  const deliveryByOrder = new Map<number, (typeof deliveries)[number]>();
+  for (const delivery of deliveries) {
+    if (!deliveryByOrder.has(delivery.orderId)) deliveryByOrder.set(delivery.orderId, delivery);
+  }
+  const lotteryByOrder = new Map<number, (typeof lotteryEntries)[number]>();
+  for (const entry of lotteryEntries) {
+    if (!lotteryByOrder.has(entry.orderId)) lotteryByOrder.set(entry.orderId, entry);
+  }
+  const menuById = new Map(menuRows.map(item => [item.id, item]));
+
+  return orders.map(order => mapOrderResponse(order, {
+    items: itemsByOrder.get(order.id) ?? [],
+    customer: order.customerId ? customerById.get(order.customerId) ?? null : null,
+    branch: branchById.get(order.branchId) ?? null,
+    relayedBy: order.relayedByUserId ? userById.get(order.relayedByUserId) ?? null : null,
+    assignedTo: order.assignedDeliveryUserId ? userById.get(order.assignedDeliveryUserId) ?? null : null,
+    delivery: deliveryByOrder.get(order.id) ?? null,
+    lotteryEntry: lotteryByOrder.get(order.id) ?? null,
+    menuItems: menuById,
+  }));
 }
 
 function tryEmit(event: string, data: unknown) {
@@ -100,11 +205,23 @@ function tryEmitTo(room: string, event: string, data: unknown) {
 router.get("/orders", authenticate, requireRole(...ADMIN_ROLES, ...ORDER_INTAKE_ROLES), async (req, res): Promise<void> => {
   const q = ListOrdersQueryParams.safeParse(req.query);
   if (!q.success) { res.status(400).json({ error: q.error.message }); return; }
-  let rows = await db.select().from(ordersTable).orderBy(desc(ordersTable.createdAt));
-  if (q.data.branchId) rows = rows.filter(o => o.branchId === q.data.branchId);
-  if (q.data.status) rows = rows.filter(o => o.status === q.data.status);
-  if (q.data.date) rows = rows.filter(o => o.createdAt.toISOString().startsWith(q.data.date!));
-  const results = await Promise.all(rows.slice(0, 50).map(buildOrderResponse));
+  const filters = [];
+  if (q.data.branchId !== undefined) filters.push(eq(ordersTable.branchId, q.data.branchId));
+  if (q.data.status) filters.push(eq(ordersTable.status, q.data.status));
+  if (q.data.date) {
+    const start = new Date(`${q.data.date}T00:00:00.000Z`);
+    if (Number.isNaN(start.getTime())) { res.json([]); return; }
+    const end = new Date(start);
+    end.setUTCDate(end.getUTCDate() + 1);
+    filters.push(gte(ordersTable.createdAt, start), lt(ordersTable.createdAt, end));
+  }
+  const rows = await db
+    .select()
+    .from(ordersTable)
+    .where(filters.length ? and(...filters) : undefined)
+    .orderBy(desc(ordersTable.createdAt))
+    .limit(50);
+  const results = await buildOrderListResponses(rows);
   res.json(ListOrdersResponse.parse(results));
 });
 
