@@ -7,7 +7,9 @@ services:
     # Keep the Render/Neon schema aligned before bundling the API. This is
     # required for newly-added tables and columns such as the streak engine.
     buildCommand: cd ../.. && pnpm install --frozen-lockfile && pnpm db:push && pnpm --filter @workspace/api-server run build
-    startCommand: node --enable-source-maps ./dist/index.mjs
+    # Also run the schema sync at boot so an existing Render service whose
+    # dashboard command predates render.yaml still gets the streak tables.
+    startCommand: cd ../.. && pnpm db:push && node --enable-source-maps ./artifacts/api-server/dist/index.mjs
     envVars:
       - key: NODE_ENV
         value: production
