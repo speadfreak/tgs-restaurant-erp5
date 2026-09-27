@@ -1,4 +1,4 @@
-import { db, branchesTable, usersTable, menuCategoriesTable, menuItemsTable, customersTable, inventoryItemsTable, expensesTable } from "@workspace/db";
+import { db, branchesTable, usersTable, menuCategoriesTable, menuItemsTable, customersTable, inventoryItemsTable, expensesTable, streakPrizesTable } from "@workspace/db";
 import bcrypt from "bcryptjs";
 
 async function seed() {
@@ -132,6 +132,18 @@ async function seed() {
     console.log("Expenses seeded");
   } else {
     console.log("Expenses already seeded, skipping");
+  }
+
+  // ── Streak prizes ────────────────────────────────────────────────────────────
+  const existingStreakPrizes = await db.select({ id: streakPrizesTable.id }).from(streakPrizesTable);
+  if (existingStreakPrizes.length === 0) {
+    await db.insert(streakPrizesTable).values([
+      { name: "Free Meal", description: "One free meal of your choice", prizeType: "free_meal", minDaysRequired: 7, cycleLengthDays: 7, streakMode: "window", isActive: true },
+      { name: "50% Discount", description: "50% off your next order", prizeType: "discount_percent", discountPercent: 50, minDaysRequired: 4, cycleLengthDays: 7, streakMode: "window", isActive: true },
+    ]);
+    console.log("Streak prizes seeded");
+  } else {
+    console.log("Streak prizes already seeded, skipping");
   }
 
   console.log("\n✅ Seed complete!");

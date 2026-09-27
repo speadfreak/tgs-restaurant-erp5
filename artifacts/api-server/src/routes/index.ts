@@ -22,6 +22,7 @@ import auditRouter from "./audit";
 import auditXlsxRouter from "./audit-xlsx";
 import settingsRouter from "./settings";
 import backupRouter from "./backup";
+import streaksRouter from "./streaks";
 
 const router: IRouter = Router();
 
@@ -36,6 +37,7 @@ router.use(authRouter);
 router.use("/", whatsappQueueRouter);  // Twilio webhook (public)
 router.use(menuRouter);                // GET endpoints are public; writes need ADMIN
 router.use(ordersRouter);              // per-route auth (kitchen_staff, delivery_staff, etc.)
+router.use(streaksRouter);             // public customer lookup + admin loyalty management
 
 // ── Role-specific portals — must precede admin-gated routers ─────────────────
 // addis_staff is NOT in ADMIN_ROLES/DELIVERY_ROLES/ORDER_INTAKE_ROLES, so these

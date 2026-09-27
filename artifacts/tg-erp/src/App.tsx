@@ -38,6 +38,8 @@ import RestockAdmin from "@/pages/restock-admin";
 import ActivitiesAdmin from "@/pages/activities-admin";
 import MyLuckyNumber from "@/pages/my-lucky-number";
 import Earnings from "@/pages/earnings";
+import Streaks from "@/pages/streaks";
+import MyStreak from "@/pages/my-streak";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -56,6 +58,7 @@ function Router() {
       <Route path="/track/:code" component={OrderTracker} />
       <Route path="/menu-public" component={PublicMenu} />
       <Route path="/order" component={OrderPublic} />
+      <Route path="/my-streak" component={MyStreak} />
 
       {/* Dedicated portals — no admin sidebar */}
       <Route path="/chef" component={ChefPortal} />
@@ -84,6 +87,7 @@ function Router() {
       <Route path="/audit"><AppLayout><AuditPage /></AppLayout></Route>
       <Route path="/settings"><AppLayout><SettingsPage /></AppLayout></Route>
       <Route path="/earnings"><AppLayout><Earnings /></AppLayout></Route>
+      <Route path="/streaks"><AppLayout><Streaks /></AppLayout></Route>
 
       {/* Public customer portal */}
       <Route path="/lucky" component={MyLuckyNumber} />

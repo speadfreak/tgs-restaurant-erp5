@@ -30,6 +30,21 @@ interface LotteryTicket {
   drawDate: string;
   orderCreatedAt: string;
 }
+interface StreakInfo {
+  streakCode: string;
+  activeDays: number;
+  winningProgress: number;
+  cycleLength: number;
+  minDays: number;
+  daysLeft: number;
+  daysNeeded: number;
+  isWinner: boolean;
+  status: string;
+  cycleStartDate: string;
+  cycleEndDate: string;
+  prize: { name: string; description?: string | null } | null;
+  message?: { en: string; am: string } | null;
+}
 interface DeliveryOrder {
   id: number; orderCode: string; status: string; channel: string;
   customerName: string | null; customerPhone: string | null; deliveryAddress: string | null;
@@ -40,6 +55,7 @@ interface DeliveryOrder {
   lotteryTickets: LotteryTicket[];
   items: { menuItemName: string | null; quantity: number }[];
   totalAed: number; createdAt: string; updatedAt?: string;
+  streakInfo?: StreakInfo | null;
 }
 
 const BASE = getApiBase();
@@ -158,6 +174,34 @@ function buildLotteryMessage(group: LotteryCustomerGroup): string {
     "",
     "📌 እባክዎ ቁጥሮቹን ይያዙት። | Please keep these numbers for our upcoming prize draw.",
   ].join("\n");
+}
+
+function buildStreakMessage(order: DeliveryOrder): string {
+  const streak = order.streakInfo;
+  if (!streak) return "";
+  const prizeName = streak.prize?.name ?? "your loyalty prize";
+  const progress = `${streak.winningProgress}/${streak.minDays}`;
+  const status = streak.isWinner
+    ? `🏆 Congratulations! You won: ${prizeName}.`
+    : `🔥 Streak progress: ${progress} winning days. ${streak.daysNeeded > 0 ? `${streak.daysNeeded} more day(s) needed.` : "You are on track to win!"}`;
+  return [
+    "TG's Restaurant Loyalty Streak",
+    "",
+    status,
+    `Streak code: ${streak.streakCode}`,
+    `Active delivery days: ${streak.activeDays}/${streak.cycleLength}`,
+    streak.daysLeft > 0 ? `Days left in this cycle: ${streak.daysLeft}` : "",
+    "",
+    "እንኳን ደስ አለዎ! | Thank you for your loyalty!",
+  ].filter(Boolean).join("\n");
+}
+
+function buildDeliveryMessage(order: DeliveryOrder): string {
+  const luckyPart = order.luckyNumber ? `\n🎯 Lucky Number: #${order.luckyNumber}` : "";
+  const streak = order.streakInfo;
+  const streakAm = streak?.message?.am ? `\n\nየታማኝነት ስትሪክዎ:\n${streak.message.am}` : "";
+  const streakEn = streak?.message?.en ? `\n\n📊 YOUR LOYALTY STREAK:\n${streak.message.en}` : "";
+  return `ቲጂ ምግብ ቤት ✨ | TG's Restaurant ✨\n\nThank you for your order! Your food has been delivered. 🍽️\nትዕዛዝዎ ደርሷል። እናመሰግናለን!${luckyPart}${streakAm}${streakEn}`;
 }
 
 export default function DeliveryPortal() {
@@ -382,9 +426,14 @@ export default function DeliveryPortal() {
   const complete = async (id: number, outcome: "delivered" | "failed") => {
     setActionPending(p => ({ ...p, [id]: true }));
     try {
-      await apiFetch(`/api/delivery/orders/${id}/complete`, "POST", { outcome });
-      setOrders(prev => prev.map(o => o.id === id ? { ...o, status: outcome } : o));
-      toast({ title: outcome === "delivered" ? "Delivered! 🎉" : "Marked failed", description: "Loop closed" });
+      const result = await apiFetch(`/api/delivery/orders/${id}/complete`, "POST", { outcome });
+      setOrders(prev => prev.map(o => o.id === id ? { ...o, status: outcome, streakInfo: result?.streakInfo ?? o.streakInfo } : o));
+      toast({
+        title: outcome === "delivered" ? (result?.streakInfo?.isWinner ? "Streak winner!" : "Delivered!") : "Marked failed",
+        description: outcome === "delivered" && result?.streakInfo
+          ? `${result.streakInfo.activeDays} active delivery day(s) recorded`
+          : "Loop closed",
+      });
       fetchOrders();
     } catch {
       toast({ title: "Error", description: "Could not update", variant: "destructive" });
@@ -822,6 +871,43 @@ export default function DeliveryPortal() {
                       <Trash2 className="h-3.5 w-3.5 mr-1.5" />
                       {actionPending[order.id] ? "Cancelling..." : "Cancel Mistaken Order"}
                     </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {recentlyDelivered.length > 0 && (
+              <div className="space-y-2.5">
+                <h3 className="font-bold text-violet-400 flex items-center gap-2 text-sm">
+                  <CheckCircle2 className="h-4 w-4" />Delivered Today ({recentlyDelivered.length})
+                </h3>
+                {recentlyDelivered.map(order => (
+                  <div key={order.id} className="queue-card" style={{ borderLeftColor: "hsl(270 70% 60%)" }}>
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="code-text text-lg text-violet-300">{order.orderCode}</div>
+                        <div className="text-sm text-zinc-300">{order.customerName ?? "Customer"}</div>
+                        {order.streakInfo && (
+                          <div className="text-xs text-zinc-500 mt-1">
+                            Streak {order.streakInfo.streakCode} · {order.streakInfo.winningProgress}/{order.streakInfo.minDays} winning days
+                          </div>
+                        )}
+                      </div>
+                      <StatusPill status={order.status} />
+                    </div>
+                    {order.streakInfo && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="w-full h-8 mt-3 text-xs font-bold border-violet-500/30 text-violet-300 hover:bg-violet-950/20"
+                        onClick={() => navigator.clipboard.writeText(buildDeliveryMessage(order)).then(
+                          () => toast({ title: "Delivery message copied", description: "Includes the lucky number and bilingual streak update" }),
+                          () => toast({ title: "Copy failed", description: "Use long-press to copy manually", variant: "destructive" }),
+                        )}
+                      >
+                        <Copy className="h-3 w-3 mr-1.5" />{order.streakInfo.isWinner ? "Copy Winner Message" : "Copy Message + Streak Update"}
+                      </Button>
+                    )}
                   </div>
                 ))}
               </div>

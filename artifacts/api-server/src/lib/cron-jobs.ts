@@ -15,6 +15,7 @@ import {
   selectFairWinners,
   uaeDate,
 } from "./lottery-selection";
+import { processEndingStreaks } from "./streak-engine";
 
 const DEFAULT_LUCKY_NUMBER_TEMPLATE = "🎉 ስለደንበኝነትዎ እናመሰግናለን! | Thank You for Choosing Us!\n\n🎟️ የዕጣ ቁጥርዎ | Your Lucky Number: {{lucky_number}}\n\n📌 እባክዎ ቁጥሩን ይያዙት። | Please keep this number for our upcoming prize draw.";
 
@@ -209,6 +210,18 @@ export async function runScheduledWeeklyBackup() {
   }
 }
 
+// ── 6. CUSTOMER STREAK CYCLE PROCESSOR ─────────────────────────────────────
+// 19:30 UTC = 23:30 UAE. Runs before the UAE date changes so every ending
+// cycle receives its winner/reset decision on the intended calendar day.
+export async function processStreakCycles() {
+  try {
+    const processed = await processEndingStreaks();
+    await logJob("streak_cycle_processor", true, `Processed ${processed} ending streak cycle(s)`);
+  } catch (err) {
+    await logJob("streak_cycle_processor", false, String(err));
+  }
+}
+
 // ── START ALL CRON JOBS ─────────────────────────────────────────────────────
 export function startCronJobs() {
   // Daily draw at 18:00 UTC (22:00 UAE)
@@ -229,5 +242,8 @@ export function startCronJobs() {
   // Weekly Google Drive backup + DB clear — Sunday 20:00 UTC (midnight UAE)
   cron.schedule("0 20 * * 0", () => { runScheduledWeeklyBackup().catch(console.error); }, { timezone: "UTC" });
 
-  console.log("[Cron] Phase 4+8 cron jobs scheduled (draw@18UTC, retry@*/15, reset@20UTC, overdue@05UTC, backup@Sun20UTC)");
+  // Streak cycles close at 23:30 UAE (19:30 UTC).
+  cron.schedule("30 19 * * *", () => { processStreakCycles().catch(console.error); }, { timezone: "UTC" });
+
+  console.log("[Cron] Phase 4+8 cron jobs scheduled (draw@18UTC, streak@19:30UTC, reset@20UTC, overdue@05UTC, backup@Sun20UTC)");
 }

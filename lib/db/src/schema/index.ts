@@ -15,3 +15,4 @@ export * from "./addis";
 export * from "./settings";
 export * from "./security";
 export * from "./backup";
+export * from "./streaks";

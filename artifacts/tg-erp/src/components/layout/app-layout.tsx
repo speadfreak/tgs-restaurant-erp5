@@ -3,7 +3,7 @@ import { useAuth } from "@/lib/auth";
 import { Link, useLocation } from "wouter";
 import {
   LayoutDashboard, ShoppingBag, ChefHat, Truck, Menu as MenuIcon,
-  Users, Package, DollarSign, Clock, Trophy, Settings, LogOut,
+  Users, Package, DollarSign, Clock, Trophy, Flame, Settings, LogOut,
   Store, Activity, RotateCcw, MessageSquare, Globe, ChevronLeft,
   ChevronRight, Zap, BarChart2, AlignJustify, X, TrendingUp,
 } from "lucide-react";
@@ -64,6 +64,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: "Engagement",
     items: [
       { href: "/lottery", label: "Lottery Engine", icon: Trophy },
+      { href: "/streaks", label: "Streak Loyalty", icon: Flame, roles: ["super_admin", "branch_manager"] },
       { href: "/activities", label: "Activities", icon: Activity },
       { href: "/branches", label: "Branches", icon: Store, roles: ["super_admin"] },
     ],

@@ -27,6 +27,7 @@ import {
 import { getIO } from "../lib/socket";
 import { authenticate, authenticateOptional, requireRole, ADMIN_ROLES, KITCHEN_ROLES, DELIVERY_ROLES, ORDER_INTAKE_ROLES } from "../middlewares/auth";
 import { ensureLotteryEntriesForOrder, uaeDate } from "../lib/lottery-entries";
+import { getStreakSnapshot, processDeliveryStreak, type StreakResult } from "../lib/streak-engine";
 
 const router: Router = Router();
 
@@ -381,6 +382,9 @@ router.get("/kitchen/queue", authenticate, requireRole(...KITCHEN_ROLES), async 
     const customer = order.customerId
       ? (await db.select().from(customersTable).where(eq(customersTable.id, order.customerId)))[0]
       : null;
+    const streakInfo = (order.customerPhoneDirect ?? customer?.phone)
+      ? await getStreakSnapshot(order.customerPhoneDirect ?? customer!.phone!).catch(() => null)
+      : null;
     const elapsedMinutes = Math.floor((Date.now() - order.createdAt.getTime()) / 60000);
     return {
       id: order.id,
@@ -400,10 +404,14 @@ router.get("/kitchen/queue", authenticate, requireRole(...KITCHEN_ROLES), async 
         unitPrice: Number(i.unitPrice),
         notes: i.notes ?? null,
       })),
+      streakInfo,
       createdAt: order.createdAt.toISOString(),
     };
   }));
-  res.json(GetKitchenQueueResponse.parse(tickets));
+  // Keep the loyalty hint available to kitchen clients. The generated API
+  // schema predates this optional field, so do not parse it through the
+  // narrower response validator here.
+  res.json(tickets);
 });
 
 router.patch("/kitchen/orders/:id/start", authenticate, requireRole(...KITCHEN_ROLES), async (req, res): Promise<void> => {
@@ -587,13 +595,15 @@ router.get("/delivery/queue", authenticate, requireRole(...DELIVERY_ROLES), asyn
     const customer = order.customerId
       ? (await db.select().from(customersTable).where(eq(customersTable.id, order.customerId)))[0]
       : null;
+    const customerPhone = order.customerPhoneDirect ?? customer?.phone ?? null;
+    const streakInfo = customerPhone ? await getStreakSnapshot(customerPhone).catch(() => null) : null;
     return {
       id: order.id,
       orderCode: order.orderCode,
       status: order.status,
       channel: order.channel,
       customerName: order.customerNameDirect ?? customer?.name ?? null,
-      customerPhone: order.customerPhoneDirect ?? customer?.phone ?? null,
+      customerPhone,
       deliveryAddress: order.deliveryAddress ?? customer?.address ?? null,
       relayedByUserId: order.relayedByUserId ?? null,
       assignedDeliveryUserId: order.assignedDeliveryUserId ?? null,
@@ -616,6 +626,7 @@ router.get("/delivery/queue", authenticate, requireRole(...DELIVERY_ROLES), asyn
       totalAed: Number(order.totalAed),
       createdAt: order.createdAt.toISOString(),
       updatedAt: order.updatedAt.toISOString(),
+      streakInfo,
     };
   }));
   res.json(enriched);
@@ -743,6 +754,7 @@ router.post("/delivery/orders/:id/complete", authenticate, requireRole(...DELIVE
     .returning();
   if (!order) { res.status(409).json({ error: "Order is not out for delivery" }); return; }
   await db.insert(orderStatusHistoryTable).values({ orderId: order.id, status: outcome, changedBy: userId });
+  let streakInfo: StreakResult | null = null;
   // Commission: credit delivery staff when order is successfully delivered
   if (outcome === "delivered") {
     try {
@@ -756,13 +768,31 @@ router.post("/delivery/orders/:id/complete", authenticate, requireRole(...DELIVE
   tryEmitTo(`branch:${order.branchId}:admin`, "order:status", { orderId: order.id, status: outcome, orderCode: order.orderCode, branchId: order.branchId });
   tryEmitTo(`order:${order.orderCode}`, "order:status_public", { status: outcome });
   if (outcome === "delivered") {
+    try {
+      const customerPhone = order.customerPhoneDirect ?? (
+        order.customerId
+          ? (await db.select({ phone: customersTable.phone }).from(customersTable).where(eq(customersTable.id, order.customerId)))[0]?.phone
+          : null
+      );
+      if (customerPhone) {
+        streakInfo = await processDeliveryStreak(
+          order.id,
+          customerPhone,
+          order.customerNameDirect ?? `Customer #${order.customerId ?? "guest"}`,
+          order.branchId,
+        );
+      }
+    } catch (err) {
+      console.error("[Streak trigger error]", err);
+    }
     const custName = order.customerNameDirect ?? `Customer #${order.customerId}`;
     sendTeamsNotification(
       `✅ Order Delivered — ${order.orderCode}`,
       `${custName} · ${Number(order.totalAed).toFixed(2)} AED · Delivered by ${req.user!.name}`,
     ).catch(() => { /* non-critical */ });
   }
-  res.json(await buildOrderResponse(order));
+  const response = await buildOrderResponse(order);
+  res.json(streakInfo ? { ...response, streakInfo } : response);
 });
 
 export default router;

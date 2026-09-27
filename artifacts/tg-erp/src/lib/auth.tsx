@@ -53,7 +53,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!token) {
-      const isPublicRoute = window.location.pathname.startsWith("/track/") || window.location.pathname === "/menu-public" || window.location.pathname === "/login" || window.location.pathname === "/lucky" || window.location.pathname === "/order";
+      const isPublicRoute = window.location.pathname.startsWith("/track/") || window.location.pathname === "/menu-public" || window.location.pathname === "/login" || window.location.pathname === "/lucky" || window.location.pathname === "/order" || window.location.pathname === "/my-streak";
       if (!isPublicRoute) {
         setLocation("/login");
       }
