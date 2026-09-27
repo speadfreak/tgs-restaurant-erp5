@@ -199,9 +199,14 @@ function buildStreakMessage(order: DeliveryOrder): string {
 function buildDeliveryMessage(order: DeliveryOrder): string {
   const luckyPart = order.luckyNumber ? `\n🎯 Lucky Number: #${order.luckyNumber}` : "";
   const streak = order.streakInfo;
-  const streakAm = streak?.message?.am ? `\n\nየታማኝነት ስትሪክዎ:\n${streak.message.am}` : "";
-  const streakEn = streak?.message?.en ? `\n\n📊 YOUR LOYALTY STREAK:\n${streak.message.en}` : "";
-  return `ቲጂ ምግብ ቤት ✨ | TG's Restaurant ✨\n\nThank you for your order! Your food has been delivered. 🍽️\nትዕዛዝዎ ደርሷል። እናመሰግናለን!${luckyPart}${streakAm}${streakEn}`;
+  const streakMessage = streak?.message?.am || streak?.message?.en
+    ? [
+      streak?.message?.am ? `የታማኝነት ስትሪክዎ:\n${streak.message.am}` : "",
+      streak?.message?.en ? `📊 YOUR LOYALTY STREAK:\n${streak.message.en}` : "",
+    ].filter(Boolean).join("\n\n")
+    : buildStreakMessage(order);
+  const streakCopy = streakMessage ? `\n\n${streakMessage}` : "";
+  return `ቲጂ ምግብ ቤት ✨ | TG's Restaurant ✨\n\nThank you for your order! Your food has been delivered. 🍽️\nትዕዛዝዎ ደርሷል። እናመሰግናለን!${luckyPart}${streakCopy}`;
 }
 
 export default function DeliveryPortal() {

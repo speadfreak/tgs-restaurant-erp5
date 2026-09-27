@@ -4,7 +4,9 @@ services:
     name: tgs-restaurant-api
     runtime: node
     rootDir: artifacts/api-server
-    buildCommand: cd ../.. && pnpm install --frozen-lockfile && pnpm --filter @workspace/api-server run build
+    # Keep the Render/Neon schema aligned before bundling the API. This is
+    # required for newly-added tables and columns such as the streak engine.
+    buildCommand: cd ../.. && pnpm install --frozen-lockfile && pnpm db:push && pnpm --filter @workspace/api-server run build
     startCommand: node --enable-source-maps ./dist/index.mjs
     envVars:
       - key: NODE_ENV
