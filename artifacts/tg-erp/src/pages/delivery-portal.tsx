@@ -179,20 +179,25 @@ function buildLotteryMessage(group: LotteryCustomerGroup): string {
 function buildStreakMessage(order: DeliveryOrder): string {
   const streak = order.streakInfo;
   if (!streak) return "";
-  const prizeName = streak.prize?.name ?? "your loyalty prize";
+  const prizeName = streak.prize?.name?.replace(/(\d+)%\s*Discount/i, "$1% Off") ?? "your foodie reward";
   const progress = `${streak.winningProgress}/${streak.minDays}`;
-  const status = streak.isWinner
-    ? `🏆 Congratulations! You won: ${prizeName}.`
-    : `🔥 Streak progress: ${progress} winning days. ${streak.daysNeeded > 0 ? `${streak.daysNeeded} more day(s) needed.` : "You are on track to win!"}`;
+  const englishStatus = streak.isWinner
+    ? `You completed ${progress} delicious days and scored ${prizeName}! Thank you for making TG's part of your week.`
+    : streak.daysNeeded > 0
+      ? `${streak.daysNeeded === 1 ? "Just 1 more delicious day" : `Just ${streak.daysNeeded} more days of delicious meals`} to score ${prizeName}! You've completed ${progress} days this cycle. See you tomorrow!`
+      : `You're on a delicious roll! You've completed ${progress} days this cycle. Keep the good food coming!`;
+  const amharicStatus = streak.isWinner
+    ? `በዚህ ዙር ${progress} ጣፋጭ ቀናት አጠናቀው ${prizeName} አሸንፈዋል! በየሳምንቱ ከTG's ጋር ስለሚያዝዙ እናመሰግናለን።`
+    : streak.daysNeeded > 0
+      ? `${streak.daysNeeded} ጣፋጭ ቀናት ብቻ ${prizeName} ለማግኘት ቀርተዋል! በዚህ ዙር ${progress} አጠናቀዋል። ነገም እንገናኝ!`
+      : `በጣፋጭ ጉዞ ላይ ነዎት! በዚህ ዙር ${progress} አጠናቀዋል። ጣፋጭ ትዕዛዝዎን ይቀጥሉ!`;
   return [
-    "TG's Restaurant Loyalty Streak",
-    "",
-    status,
-    `Streak code: ${streak.streakCode}`,
-    `Active delivery days: ${streak.activeDays}/${streak.cycleLength}`,
-    streak.daysLeft > 0 ? `Days left in this cycle: ${streak.daysLeft}` : "",
-    "",
-    "እንኳን ደስ አለዎ! | Thank you for your loyalty!",
+    "📊 የትዕዛዝ ፈተና፦",
+    amharicStatus,
+    `🎫 Challenge code: ${streak.streakCode}`,
+    "📊 FOODIE CHALLENGE:",
+    englishStatus,
+    `🎫 Challenge code: ${streak.streakCode}`,
   ].filter(Boolean).join("\n");
 }
 
@@ -201,8 +206,8 @@ function buildDeliveryMessage(order: DeliveryOrder): string {
   const streak = order.streakInfo;
   const streakMessage = streak?.message?.am || streak?.message?.en
     ? [
-      streak?.message?.am ? `የታማኝነት ስትሪክዎ:\n${streak.message.am}` : "",
-      streak?.message?.en ? `📊 YOUR LOYALTY STREAK:\n${streak.message.en}` : "",
+      streak?.message?.am ? `📊 የትዕዛዝ ፈተና፦\n${streak.message.am}` : "",
+      streak?.message?.en ? `📊 FOODIE CHALLENGE:\n${streak.message.en}` : "",
     ].filter(Boolean).join("\n\n")
     : buildStreakMessage(order);
   const streakCopy = streakMessage ? `\n\n${streakMessage}` : "";

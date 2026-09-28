@@ -74,6 +74,7 @@ export async function getActivePrize(branchId: number): Promise<StreakPrize | nu
   const rows = await db.select().from(streakPrizesTable).where(
     and(
       eq(streakPrizesTable.isActive, true),
+      isNull(streakPrizesTable.archivedAt),
       or(eq(streakPrizesTable.branchId, branchId), isNull(streakPrizesTable.branchId)),
     ),
   ).orderBy(desc(streakPrizesTable.id));
@@ -170,6 +171,13 @@ function longestConsecutiveRun(dates: string[]): number {
   return longest;
 }
 
+function displayPrizeName(prize: StreakPrize | null): string {
+  if (prize?.discountPercent) {
+    return `${prize.discountPercent}% Off`;
+  }
+  return prize?.name || "your foodie reward";
+}
+
 function generateStreakMessage(params: {
   activeDays: number;
   winningProgress: number;
@@ -188,34 +196,36 @@ function generateStreakMessage(params: {
     activeDays, winningProgress, cycleLength, minDays, daysLeft, daysNeeded,
     canStillWin, isWinner, prize, streakCode, customerName, cycleEnded,
   } = params;
-  const prizeName = prize?.name || "your prize";
+  const prizeName = displayPrizeName(prize);
   if (isWinner && prize) {
     return {
-      en: `CONGRATULATIONS ${customerName}! You ordered ${activeDays} days this cycle and WON: ${prize.name}. Your streak code: ${streakCode}. Contact us to claim your prize. Thank you for being a loyal TG's customer!`,
-      am: `እንኳን ደስ አለዎ ${customerName}! በዚህ ዑደት ${activeDays} ቀን ትዕዛዝ ሰጥተዋል እና ${prize.name} አሸነፉ። የስትሪክ ኮድዎ: ${streakCode}። ሽልማቱን ለማግኘት ያግኙን።`,
+      en: `🏆 FOODIE CHALLENGE COMPLETE!\nYou completed ${winningProgress}/${minDays} delicious days and scored ${prizeName}! Thank you for making TG's part of your week.\n\n🎫 Challenge code: ${streakCode}`,
+      am: `🏆 የትዕዛዝ ፈተናው ተጠናቀቀ!\nበዚህ ዙር ${winningProgress}/${minDays} ጣፋጭ ቀናት አጠናቀው ${prizeName} አሸንፈዋል! በየሳምንቱ ከTG's ጋር ስለሚያዝዙ እናመሰግናለን።\n\n🎫 የፈተና ኮድ: ${streakCode}`,
     };
   }
   if (cycleEnded) {
     return {
-      en: `This cycle ended at ${activeDays}/${minDays} active days. Your new streak starts now — order again tomorrow and begin your journey to ${prizeName}. Streak code: ${streakCode}`,
-      am: `ይህ ዑደት ${activeDays}/${minDays} ንቁ ቀናት ላይ አብቅቷል። አዲሱ ስትሪክዎ አሁን ይጀምራል፤ ነገ እንደገና ይዘዙ። ስትሪክ ኮድ: ${streakCode}`,
+      en: `This round wrapped at ${winningProgress}/${minDays} days. Your next foodie challenge starts with your next delicious order — see you soon!\n\n🎫 Challenge code: ${streakCode}`,
+      am: `ይህ ዙር ${winningProgress}/${minDays} ቀናት ላይ አብቅቷል። በሚቀጥለው ጣፋጭ ትዕዛዝዎ አዲስ የትዕዛዝ ፈተና ይጀምራል — በቅርቡ እንገናኝ!\n\n🎫 የፈተና ኮድ: ${streakCode}`,
     };
   }
   if (daysNeeded === 0) {
     return {
-      en: `Amazing ${customerName}! You have ${winningProgress} winning days — you are on track to win ${prizeName}. ${daysLeft} day(s) left. Keep going! Streak: ${streakCode}`,
-      am: `አስደናቂ ${customerName}! ${winningProgress} የማሸነፊያ ቀናት ደርሰዋል፤ ${prizeName} ለማሸነፍ በጥሩ ሁኔታ ላይ ነዎት። ${daysLeft} ቀን ቀርቷል። ስትሪክ: ${streakCode}`,
+      en: `You're on a delicious roll! You've completed ${winningProgress}/${minDays} days this cycle. Keep the good food coming — ${daysLeft} ${daysLeft === 1 ? "day" : "days"} left to score ${prizeName}!\n\n🎫 Challenge code: ${streakCode}`,
+      am: `በጣፋጭ ጉዞ ላይ ነዎት! በዚህ ዙር ${winningProgress}/${minDays} ቀናት አጠናቀዋል። ${prizeName} ለማግኘት ${daysLeft} ቀን ቀርቷል — ጣፋጭ ትዕዛዝዎን ይቀጥሉ!\n\n🎫 የፈተና ኮድ: ${streakCode}`,
     };
   }
   if (!canStillWin) {
     return {
-      en: `Streak ${streakCode}: ${winningProgress}/${minDays} days. There is not enough time left this cycle, but your next cycle starts fresh. Keep ordering with us!`,
-      am: `ስትሪክ ${streakCode}: ${winningProgress}/${minDays} ቀናት። በዚህ ዑደት በቂ ጊዜ አልቀረም፤ ቀጣዩ ዑደት አዲስ ይጀምራል። ከእኛ ጋር መዘዙን ይቀጥሉ!`,
+      en: `You've completed ${winningProgress}/${minDays} days this cycle, but this round needs more days than the calendar has left. No stress — your next foodie challenge starts fresh with your next order!\n\n🎫 Challenge code: ${streakCode}`,
+      am: `በዚህ ዙር ${winningProgress}/${minDays} ቀናት አጠናቀዋል፤ ነገር ግን የቀሩት ቀናት ለማሸነፍ በቂ አይደሉም። ምንም አይደል — በሚቀጥለው ትዕዛዝዎ አዲስ የትዕዛዝ ፈተና ይጀምራል!\n\n🎫 የፈተና ኮድ: ${streakCode}`,
     };
   }
+  const dayPhraseEn = daysNeeded === 1 ? "Just 1 more delicious day" : `Just ${daysNeeded} more days of delicious meals`;
+  const dayPhraseAm = daysNeeded === 1 ? "አንድ ጣፋጭ ቀን ብቻ" : `${daysNeeded} ጣፋጭ ቀናት ብቻ`;
   return {
-    en: `${daysNeeded === 1 ? "ONE MORE DAY" : `${daysNeeded} more days`} to win ${prizeName}. You have ${winningProgress}/${minDays} winning days this cycle and ${daysLeft} day(s) left. Order tomorrow too! Streak: ${streakCode}`,
-    am: `${daysNeeded === 1 ? "አንድ ቀን ብቻ ቀረ" : `${daysNeeded} ተጨማሪ ቀናት`} ${prizeName} ለማሸነፍ። በዚህ ዑደት ${winningProgress}/${minDays} ቀናት አሉዎት፤ ${daysLeft} ቀን ቀርቷል። ነገም ይዘዙ! ስትሪክ: ${streakCode}`,
+    en: `${dayPhraseEn} to score ${prizeName}! You've completed ${winningProgress}/${minDays} days this cycle. See you tomorrow!\n\n🎫 Challenge code: ${streakCode}`,
+    am: `${dayPhraseAm} ${prizeName} ለማግኘት ቀርተዋል! በዚህ ዙር ${winningProgress}/${minDays} አጠናቀዋል። ነገም እንገናኝ!\n\n🎫 የፈተና ኮድ: ${streakCode}`,
   };
 }
 

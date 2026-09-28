@@ -15,6 +15,7 @@ export const streakPrizesTable = pgTable("streak_prizes", {
   streakMode: text("streak_mode").notNull().default("window"),
   isActive: boolean("is_active").notNull().default(true),
   branchId: integer("branch_id").references(() => branchesTable.id),
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

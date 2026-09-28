@@ -21,8 +21,14 @@ export async function ensureStreakSchema(): Promise<void> {
       streak_mode text NOT NULL DEFAULT 'window',
       is_active boolean NOT NULL DEFAULT true,
       branch_id integer REFERENCES branches(id),
+       archived_at timestamptz,
       created_at timestamptz NOT NULL DEFAULT now()
     )
+  `);
+
+  await db.execute(sql`
+    ALTER TABLE streak_prizes
+      ADD COLUMN IF NOT EXISTS archived_at timestamptz
   `);
 
   await db.execute(sql`

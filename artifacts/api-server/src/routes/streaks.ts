@@ -142,6 +142,7 @@ router.get("/streaks/prizes", async (req, res): Promise<void> => {
   const branchId = scopedBranchId(req);
   const rows = await db.select().from(streakPrizesTable).where(
     and(
+      isNull(streakPrizesTable.archivedAt),
       branchId === undefined
         ? undefined
         : or(eq(streakPrizesTable.branchId, branchId), isNull(streakPrizesTable.branchId)),
@@ -231,6 +232,23 @@ router.delete("/streaks/prizes/:id", async (req, res): Promise<void> => {
     res.status(403).json({ error: "You cannot delete this prize" });
     return;
   }
+
+  const referencedStreak = (await db.select({ id: customerStreaksTable.id })
+    .from(customerStreaksTable)
+    .where(eq(customerStreaksTable.prizeId, id))
+    .limit(1))[0];
+
+  if (referencedStreak) {
+    // Keep the reward row for historical streaks, but remove it from the
+    // catalogue so deleting a prize never breaks the FK or customer history.
+    const [archived] = await db.update(streakPrizesTable)
+      .set({ isActive: false, archivedAt: new Date() })
+      .where(eq(streakPrizesTable.id, id))
+      .returning();
+    res.json({ archived: true, prize: archived });
+    return;
+  }
+
   await db.delete(streakPrizesTable).where(eq(streakPrizesTable.id, id));
   res.status(204).end();
 });
