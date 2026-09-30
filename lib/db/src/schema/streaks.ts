@@ -11,6 +11,7 @@ export const streakPrizesTable = pgTable("streak_prizes", {
   freeItemName: text("free_item_name"),
   customDescription: text("custom_description"),
   minDaysRequired: integer("min_days_required").notNull().default(4),
+  minOrdersRequired: integer("min_orders_required").notNull().default(6),
   cycleLengthDays: integer("cycle_length_days").notNull().default(7),
   streakMode: text("streak_mode").notNull().default("window"),
   isActive: boolean("is_active").notNull().default(true),
@@ -28,6 +29,8 @@ export const customerStreaksTable = pgTable("customer_streaks", {
   cycleStartDate: date("cycle_start_date", { mode: "string" }).notNull(),
   cycleEndDate: date("cycle_end_date", { mode: "string" }).notNull(),
   activeDays: integer("active_days").notNull().default(0),
+  orderCount: integer("order_count").notNull().default(0),
+  targetOrders: integer("target_orders"),
   activeDayDates: jsonb("active_day_dates").$type<string[]>().notNull().default([]),
   streakMode: text("streak_mode").notNull().default("window"),
   status: text("status").notNull().default("active"),
@@ -45,7 +48,7 @@ export const streakActiveDaysTable = pgTable("streak_active_days", {
   orderId: integer("order_id").references(() => ordersTable.id),
   recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
-  streakDateUnique: unique("streak_active_days_streak_date_unique").on(table.streakId, table.activeDate),
+  streakOrderUnique: unique("streak_active_days_streak_order_unique").on(table.streakId, table.orderId),
 }));
 
 export type StreakPrize = typeof streakPrizesTable.$inferSelect;

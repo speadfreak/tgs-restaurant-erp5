@@ -65,8 +65,8 @@ const SETTING_DEFAULTS: Record<string, { label: string; isSensitive: boolean; se
   google_drive_enabled:            { label: "Enable Auto Weekly Backup",        isSensitive: false, section: "google_drive", description: "Toggle to enable/disable the automatic Sunday midnight backup (true/false)" },
   backup_notify_whatsapp:          { label: "WhatsApp Notification Number",     isSensitive: false, section: "google_drive", description: "Phone number to notify when backup completes (include country code)" },
   streak_enabled:                  { label: "Enable Streak Loyalty System",     isSensitive: false, section: "system", description: "Set to false to pause new loyalty tracking without changing existing history" },
-  streak_default_cycle_length:     { label: "Default Streak Cycle Length",      isSensitive: false, section: "system", description: "Default number of UAE calendar days (5, 7, or 10)" },
-  streak_default_min_days:         { label: "Default Minimum Active Days",      isSensitive: false, section: "system", description: "Minimum delivered days required to win" },
+  streak_default_cycle_length:     { label: "Default Challenge Cycle Length",   isSensitive: false, section: "system", description: "Default number of UAE calendar days for a customer order challenge" },
+  streak_default_min_days:         { label: "Default Orders Required",          isSensitive: false, section: "system", description: "Default number of delivered orders required to win; retained under the legacy setting key" },
   streak_reset_notification:       { label: "Streak Reset Notification",        isSensitive: false, section: "system", description: "Send the bilingual reset message when a cycle ends without a win (true/false)" },
   streak_auto_notification:         { label: "Winner Auto-Notification",         isSensitive: false, section: "system", description: "Send a bilingual winner message through WhatsApp when enabled (true/false)" },
 };

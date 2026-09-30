@@ -33,10 +33,13 @@ interface LotteryTicket {
 interface StreakInfo {
   streakCode: string;
   activeDays: number;
+  ordersCompleted: number;
   winningProgress: number;
   cycleLength: number;
+  minOrders: number;
   minDays: number;
   daysLeft: number;
+  ordersRemaining: number;
   daysNeeded: number;
   isWinner: boolean;
   status: string;
@@ -180,17 +183,20 @@ function buildStreakMessage(order: DeliveryOrder): string {
   const streak = order.streakInfo;
   if (!streak) return "";
   const prizeName = streak.prize?.name?.replace(/(\d+)%\s*Discount/i, "$1% Off") ?? "your foodie reward";
-  const progress = `${streak.winningProgress}/${streak.minDays}`;
+  const completed = streak.ordersCompleted ?? streak.winningProgress;
+  const target = streak.minOrders ?? streak.minDays;
+  const remaining = streak.ordersRemaining ?? streak.daysNeeded;
+  const progress = `${completed}/${target}`;
   const englishStatus = streak.isWinner
-    ? `You completed ${progress} delicious days and scored ${prizeName}! Thank you for making TG's part of your week.`
-    : streak.daysNeeded > 0
-      ? `${streak.daysNeeded === 1 ? "Just 1 more delicious day" : `Just ${streak.daysNeeded} more days of delicious meals`} to score ${prizeName}! You've completed ${progress} days this cycle. See you tomorrow!`
-      : `You're on a delicious roll! You've completed ${progress} days this cycle. Keep the good food coming!`;
+    ? `You completed ${progress} orders and scored ${prizeName}! Please claim your prize on your next visit.`
+    : remaining > 0
+      ? `Just ${remaining} more ${remaining === 1 ? "order" : "orders"} of delicious meals to score ${prizeName}! You've completed ${progress} orders this cycle. See you next order!`
+      : `You're on a delicious roll! You've completed ${progress} orders this cycle. Keep the good food coming!`;
   const amharicStatus = streak.isWinner
-    ? `በዚህ ዙር ${progress} ጣፋጭ ቀናት አጠናቀው ${prizeName} አሸንፈዋል! በየሳምንቱ ከTG's ጋር ስለሚያዝዙ እናመሰግናለን።`
-    : streak.daysNeeded > 0
-      ? `${streak.daysNeeded} ጣፋጭ ቀናት ብቻ ${prizeName} ለማግኘት ቀርተዋል! በዚህ ዙር ${progress} አጠናቀዋል። ነገም እንገናኝ!`
-      : `በጣፋጭ ጉዞ ላይ ነዎት! በዚህ ዙር ${progress} አጠናቀዋል። ጣፋጭ ትዕዛዝዎን ይቀጥሉ!`;
+    ? `በዚህ ዙር ${progress} የትዕዛዝ ጊዜ አጠናቀው ${prizeName} አሸንፈዋል! ሽልማትዎን በሚቀጥለው ጉብኝትዎ ይውሰዱ።`
+    : remaining > 0
+      ? `${remaining} የትዕዛዝ ጊዜ${remaining === 1 ? "" : "ዎች"} ብቻ ${prizeName} ለማግኘት ቀርተዋል! በዚህ ዙር ${progress} አጠናቀዋል። በቀጣይ ትዕዛዝ እንገናኝ!`
+      : `በጣፋጭ ጉዞ ላይ ነዎት! በዚህ ዙር ${progress} የትዕዛዝ ጊዜ አጠናቀዋል። ጣፋጭ ትዕዛዝዎን ይቀጥሉ!`;
   return [
     "📊 የትዕዛዝ ፈተና፦",
     amharicStatus,
@@ -899,7 +905,7 @@ export default function DeliveryPortal() {
                         <div className="text-sm text-zinc-300">{order.customerName ?? "Customer"}</div>
                         {order.streakInfo && (
                           <div className="text-xs text-zinc-500 mt-1">
-                            Streak {order.streakInfo.streakCode} · {order.streakInfo.winningProgress}/{order.streakInfo.minDays} winning days
+                             Challenge {order.streakInfo.streakCode} · {order.streakInfo.ordersCompleted ?? order.streakInfo.winningProgress}/{order.streakInfo.minOrders ?? order.streakInfo.minDays} orders
                           </div>
                         )}
                       </div>

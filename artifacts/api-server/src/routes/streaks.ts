@@ -24,10 +24,10 @@ function scopedBranchId(req: Request): number | undefined {
   return parsed !== undefined && Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
-function statusLabel(streak: typeof customerStreaksTable.$inferSelect, minDays: number): string {
+function statusLabel(streak: typeof customerStreaksTable.$inferSelect, minOrders: number): string {
   if (streak.status === "won") return "winner";
   if (streak.status === "lost") return "reset";
-  if (streak.activeDays >= minDays) return "on_track";
+  if (streak.orderCount >= minOrders) return "on_track";
   const daysLeft = Math.max(
     0,
     Math.ceil((new Date(`${streak.cycleEndDate}T00:00:00Z`).getTime() - Date.now()) / 86_400_000),
@@ -39,7 +39,12 @@ async function mapStreak(streak: typeof customerStreaksTable.$inferSelect) {
   const prize = streak.prizeId
     ? (await db.select().from(streakPrizesTable).where(eq(streakPrizesTable.id, streak.prizeId)))[0] ?? null
     : await getActivePrize(streak.branchId ?? 0);
-  const minDays = prize?.minDaysRequired ?? 4;
+  const minOrders = streak.targetOrders || prize?.minOrdersRequired || prize?.minDaysRequired || 6;
+  const ordersCompleted = streak.orderCount || streak.activeDayDates.length || streak.activeDays;
+  const ordersRemaining = Math.max(0, minOrders - ordersCompleted);
+  const daysLeft = streak.status === "active"
+    ? Math.max(0, Math.ceil((new Date(`${streak.cycleEndDate}T00:00:00Z`).getTime() - Date.now()) / 86_400_000))
+    : 0;
   return {
     id: streak.id,
     customerName: streak.customerName,
@@ -50,11 +55,16 @@ async function mapStreak(streak: typeof customerStreaksTable.$inferSelect) {
     cycleEndDate: streak.cycleEndDate,
     activeDays: streak.activeDays,
     activeDayDates: streak.activeDayDates,
-    cycleLengthDays: prize?.cycleLengthDays ?? 7,
-    minDaysRequired: minDays,
+    ordersCompleted,
+    ordersRemaining,
+    orderDates: streak.activeDayDates,
+    cycleLengthDays: Math.max(1, Math.ceil((new Date(`${streak.cycleEndDate}T00:00:00Z`).getTime() - new Date(`${streak.cycleStartDate}T00:00:00Z`).getTime()) / 86_400_000) + 1),
+    minOrdersRequired: minOrders,
+    minDaysRequired: minOrders,
+    daysLeft,
     streakMode: streak.streakMode,
     status: streak.status,
-    displayStatus: statusLabel(streak, minDays),
+    displayStatus: statusLabel(streak, minOrders),
     prize: prize ? {
       id: prize.id,
       name: prize.name,
@@ -154,17 +164,17 @@ router.get("/streaks/prizes", async (req, res): Promise<void> => {
 router.post("/streaks/prizes", async (req, res): Promise<void> => {
   const {
     name, description, prizeType = "custom", discountPercent, freeItemName,
-    customDescription, minDaysRequired = 4, cycleLengthDays = 7,
+    customDescription, minOrdersRequired, minDaysRequired, cycleLengthDays = 7,
     streakMode = "window", branchId, isActive = true,
   } = req.body ?? {};
-  const minDays = Number(minDaysRequired);
+  const minOrders = Number(minOrdersRequired ?? minDaysRequired ?? 6);
   const cycleLength = Number(cycleLengthDays);
   if (typeof name !== "string" || !name.trim()) {
     res.status(400).json({ error: "Prize name is required" });
     return;
   }
-  if (![5, 7, 10].includes(cycleLength) || !Number.isInteger(minDays) || minDays < 2 || minDays > cycleLength) {
-    res.status(400).json({ error: "Cycle length must be 5, 7, or 10 and minimum days must fit within it" });
+  if (!Number.isInteger(cycleLength) || cycleLength < 1 || cycleLength > 90 || !Number.isInteger(minOrders) || minOrders < 1 || minOrders > 100) {
+    res.status(400).json({ error: "Challenge days must be between 1 and 90, and required orders must be between 1 and 100" });
     return;
   }
   if (!["window", "consecutive"].includes(streakMode)) {
@@ -182,7 +192,8 @@ router.post("/streaks/prizes", async (req, res): Promise<void> => {
     discountPercent: discountPercent == null ? null : Number(discountPercent),
     freeItemName: typeof freeItemName === "string" ? freeItemName : null,
     customDescription: typeof customDescription === "string" ? customDescription : null,
-    minDaysRequired: minDays,
+    minDaysRequired: minOrders,
+    minOrdersRequired: minOrders,
     cycleLengthDays: cycleLength,
     streakMode,
     isActive: Boolean(isActive),
@@ -213,7 +224,12 @@ router.patch("/streaks/prizes/:id", async (req, res): Promise<void> => {
     ...(req.body?.discountPercent !== undefined ? { discountPercent: req.body.discountPercent == null ? null : Number(req.body.discountPercent) } : {}),
     ...(req.body?.freeItemName !== undefined ? { freeItemName: req.body.freeItemName || null } : {}),
     ...(req.body?.customDescription !== undefined ? { customDescription: req.body.customDescription || null } : {}),
-    ...(req.body?.minDaysRequired !== undefined ? { minDaysRequired: Number(req.body.minDaysRequired) } : {}),
+    ...(req.body?.minOrdersRequired !== undefined || req.body?.minDaysRequired !== undefined
+      ? {
+        minDaysRequired: Number(req.body?.minOrdersRequired ?? req.body?.minDaysRequired),
+        minOrdersRequired: Number(req.body?.minOrdersRequired ?? req.body?.minDaysRequired),
+      }
+      : {}),
     ...(req.body?.cycleLengthDays !== undefined ? { cycleLengthDays: Number(req.body.cycleLengthDays) } : {}),
     ...(req.body?.streakMode !== undefined ? { streakMode: req.body.streakMode } : {}),
     ...(req.body?.isActive !== undefined ? { isActive: Boolean(req.body.isActive) } : {}),

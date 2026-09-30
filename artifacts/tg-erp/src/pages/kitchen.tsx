@@ -113,7 +113,7 @@ function TicketCard({ ticket, onStart, onReady, isStarting, isReadying }: any) {
             <div className="text-sm opacity-80 mt-1">{ticket.customerName || 'Delivery'}</div>
             {ticket.streakInfo && (
               <div className="mt-2 inline-flex items-center gap-1 rounded-full border border-orange-500/30 bg-orange-500/10 px-2 py-0.5 text-[10px] font-bold text-orange-300">
-                🔥 Streak {ticket.streakInfo.winningProgress}/{ticket.streakInfo.minDays}
+                Challenge {ticket.streakInfo.ordersCompleted ?? ticket.streakInfo.winningProgress}/{ticket.streakInfo.minOrders ?? ticket.streakInfo.minDays} orders
               </div>
             )}
           </div>

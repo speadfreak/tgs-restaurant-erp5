@@ -7,7 +7,8 @@ import { getApiBase } from "@/lib/api-base";
 const BASE = getApiBase();
 type Snapshot = {
   customerName: string | null; customerPhone: string; streakCode: string; activeDays: number;
-  winningProgress: number; minDays: number; cycleLength: number; daysLeft: number; daysNeeded: number;
+  ordersCompleted: number; winningProgress: number; minOrders: number; minDays: number; cycleLength: number;
+  daysLeft: number; ordersRemaining: number; daysNeeded: number;
   isWinner: boolean; status: string; cycleStartDate: string; cycleEndDate: string;
   prize: { name: string; description: string | null } | null;
 };
@@ -48,13 +49,13 @@ export default function MyStreak() {
           <div className="mt-6 space-y-4">
             <div className="rounded-2xl border border-amber-500/30 bg-zinc-950/90 p-5">
               <div className="flex items-start justify-between gap-3"><div><div className="text-xs uppercase tracking-widest text-zinc-500">Streak code</div><div className="code-text mt-1 text-2xl text-amber-400">{snapshot.streakCode}</div><div className="mt-2 font-semibold text-white">{snapshot.customerName || "TG&apos;s customer"}</div></div>{snapshot.isWinner && <Trophy className="h-8 w-8 text-amber-400" />}</div>
-              <div className="mt-6 grid grid-cols-3 gap-2 text-center"><div className="rounded-lg bg-zinc-900 p-3"><div className="text-2xl font-black text-orange-400">{snapshot.winningProgress}</div><div className="text-[10px] uppercase text-zinc-500">Winning days</div></div><div className="rounded-lg bg-zinc-900 p-3"><div className="text-2xl font-black text-emerald-400">{snapshot.minDays}</div><div className="text-[10px] uppercase text-zinc-500">Needed</div></div><div className="rounded-lg bg-zinc-900 p-3"><div className="text-2xl font-black text-blue-400">{snapshot.daysLeft}</div><div className="text-[10px] uppercase text-zinc-500">Days left</div></div></div>
-              <div className="mt-4 h-3 overflow-hidden rounded-full bg-zinc-800"><div className="h-full rounded-full bg-gradient-to-r from-orange-500 to-amber-300 transition-all" style={{ width: `${Math.min(100, (snapshot.winningProgress / snapshot.minDays) * 100)}%` }} /></div>
+               <div className="mt-6 grid grid-cols-3 gap-2 text-center"><div className="rounded-lg bg-zinc-900 p-3"><div className="text-2xl font-black text-orange-400">{snapshot.ordersCompleted}</div><div className="text-[10px] uppercase text-zinc-500">Orders completed</div></div><div className="rounded-lg bg-zinc-900 p-3"><div className="text-2xl font-black text-emerald-400">{snapshot.minOrders}</div><div className="text-[10px] uppercase text-zinc-500">Orders to win</div></div><div className="rounded-lg bg-zinc-900 p-3"><div className="text-2xl font-black text-blue-400">{snapshot.daysLeft}</div><div className="text-[10px] uppercase text-zinc-500">Days left</div></div></div>
+               <div className="mt-4 h-3 overflow-hidden rounded-full bg-zinc-800"><div className="h-full rounded-full bg-gradient-to-r from-orange-500 to-amber-300 transition-all" style={{ width: `${Math.min(100, (snapshot.ordersCompleted / snapshot.minOrders) * 100)}%` }} /></div>
               <div className="mt-2 flex items-center justify-between text-xs text-zinc-500"><span>{snapshot.cycleStartDate}</span><CalendarDays className="h-3.5 w-3.5" /><span>{snapshot.cycleEndDate}</span></div>
             </div>
             <div className={`rounded-xl border p-4 ${snapshot.isWinner ? "border-emerald-500/30 bg-emerald-500/10" : "border-orange-500/20 bg-orange-500/5"}`}>
-              <div className="font-bold text-amber-200">{snapshot.isWinner ? `You won ${snapshot.prize?.name ?? "your prize"}!` : snapshot.daysNeeded > 0 ? `${snapshot.daysNeeded} more active day(s) to win` : "You are on track to win!"}</div>
-              <div className="mt-1 text-sm text-zinc-300">{snapshot.prize?.description ?? "Order on different UAE calendar days to build your streak."}</div>
+               <div className="font-bold text-amber-200">{snapshot.isWinner ? `You won ${snapshot.prize?.name ?? "your prize"}!` : snapshot.ordersRemaining > 0 ? `${snapshot.ordersRemaining} more order(s) to win` : "You are on track to win!"}</div>
+               <div className="mt-1 text-sm text-zinc-300">{snapshot.prize?.description ?? "Complete the required number of delivered orders before the challenge window ends."}</div>
             </div>
           </div>
         )}

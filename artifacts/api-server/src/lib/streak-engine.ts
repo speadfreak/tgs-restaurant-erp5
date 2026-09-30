@@ -1,5 +1,5 @@
 import { randomBytes } from "crypto";
-import { and, asc, desc, eq, isNull, or } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, lt, or } from "drizzle-orm";
 import {
   db,
   customersTable,
@@ -14,17 +14,20 @@ import { sendWhatsAppMessage } from "./twilio";
 
 const UAE_TIMEZONE = "Asia/Dubai";
 const DEFAULT_CYCLE_LENGTH = 7;
-const DEFAULT_MIN_DAYS = 4;
+const DEFAULT_MIN_ORDERS = 6;
 
 export type StreakMessage = { en: string; am: string };
 
 export type StreakResult = {
   streakCode: string;
   activeDays: number;
+  ordersCompleted: number;
   winningProgress: number;
   cycleLength: number;
+  minOrders: number;
   minDays: number;
   daysLeft: number;
+  ordersRemaining: number;
   daysNeeded: number;
   isWinner: boolean;
   prize: StreakPrize | null;
@@ -38,6 +41,11 @@ export type StreakSnapshot = Omit<StreakResult, "message"> & {
   message: StreakMessage | null;
   customerName: string | null;
   customerPhone: string;
+};
+
+type StreakProgress = {
+  orderCount: number;
+  activeDates: string[];
 };
 
 function todayUAE(): string {
@@ -70,6 +78,14 @@ function createStreakCode(): string {
   return `STK-${randomBytes(4).toString("base64url").replace(/[^A-Z0-9]/gi, "").toUpperCase().slice(0, 6).padEnd(6, "0")}`;
 }
 
+function prizeOrderTarget(prize: StreakPrize | null): number {
+  return prize?.minOrdersRequired ?? prize?.minDaysRequired ?? DEFAULT_MIN_ORDERS;
+}
+
+function streakOrderTarget(streak: CustomerStreak, prize: StreakPrize | null): number {
+  return streak.targetOrders || prizeOrderTarget(prize);
+}
+
 export async function getActivePrize(branchId: number): Promise<StreakPrize | null> {
   const rows = await db.select().from(streakPrizesTable).where(
     and(
@@ -99,8 +115,7 @@ async function ensureCustomerCode(phone: string, name: string): Promise<string> 
     try {
       await db.insert(customersTable).values({ name: name || "Customer", phone, streakCode: code });
     } catch {
-      // Delivery orders may intentionally use a direct customer identity. The
-      // streak remains valid even when the legacy customer record is absent.
+      // Delivery orders may intentionally use a direct customer identity.
     }
   }
   return code;
@@ -116,9 +131,8 @@ export async function getActiveStreak(phone: string): Promise<CustomerStreak | n
 
 async function createNewStreak(phone: string, name: string, branchId: number, code?: string): Promise<CustomerStreak> {
   const prize = await getActivePrize(branchId);
+  const targetOrders = prizeOrderTarget(prize);
   const cycleLength = prize?.cycleLengthDays ?? (Number(await getSetting("streak_default_cycle_length")) || DEFAULT_CYCLE_LENGTH);
-  const minDays = prize?.minDaysRequired ?? (Number(await getSetting("streak_default_min_days")) || DEFAULT_MIN_DAYS);
-  const mode = prize?.streakMode ?? "window";
   const start = todayUAE();
   const [streak] = await db.insert(customerStreaksTable).values({
     customerPhone: phone,
@@ -128,12 +142,14 @@ async function createNewStreak(phone: string, name: string, branchId: number, co
     cycleStartDate: start,
     cycleEndDate: addDays(start, cycleLength - 1),
     activeDays: 0,
+    orderCount: 0,
+    targetOrders,
     activeDayDates: [],
-    streakMode: mode,
+    streakMode: "window",
     status: "active",
     prizeId: prize?.id ?? null,
   }).returning();
-  if (!streak) throw new Error("Could not create customer streak");
+  if (!streak) throw new Error("Could not create customer challenge");
   const [customer] = await db.select({ id: customersTable.id })
     .from(customersTable)
     .where(eq(customersTable.phone, phone));
@@ -153,96 +169,87 @@ async function getPrizeForStreak(streak: CustomerStreak): Promise<StreakPrize | 
   return getActivePrize(streak.branchId ?? 0);
 }
 
-async function getActiveDates(streakId: number): Promise<string[]> {
-  const rows = await db.select({ activeDate: streakActiveDaysTable.activeDate })
-    .from(streakActiveDaysTable)
-    .where(eq(streakActiveDaysTable.streakId, streakId))
-    .orderBy(asc(streakActiveDaysTable.activeDate));
-  return rows.map(row => row.activeDate);
+async function getStreakProgress(streak: CustomerStreak): Promise<StreakProgress> {
+  const rows = await db.select({
+    activeDate: streakActiveDaysTable.activeDate,
+  }).from(streakActiveDaysTable)
+    .where(eq(streakActiveDaysTable.streakId, streak.id))
+    .orderBy(asc(streakActiveDaysTable.activeDate), asc(streakActiveDaysTable.id));
+
+  // Rows are now one per delivered order. The fallback keeps older day-based
+  // records visible until their first order is added after this upgrade.
+  const orderCount = rows.length || streak.orderCount || streak.activeDays || streak.activeDayDates.length;
+  const activeDates = Array.from(new Set(rows.map(row => row.activeDate).concat(streak.activeDayDates ?? []))).sort();
+  return { orderCount, activeDates };
 }
 
-function longestConsecutiveRun(dates: string[]): number {
-  let longest = 0;
-  let current = 0;
-  for (let index = 0; index < dates.length; index++) {
-    current = index > 0 && dayNumber(dates[index]!) === dayNumber(dates[index - 1]!) + 1 ? current + 1 : 1;
-    longest = Math.max(longest, current);
-  }
-  return longest;
+async function syncStreakProgress(streak: CustomerStreak, progress: StreakProgress): Promise<void> {
+  await db.update(customerStreaksTable).set({
+    activeDays: progress.activeDates.length,
+    orderCount: progress.orderCount,
+    activeDayDates: progress.activeDates,
+    updatedAt: new Date(),
+  }).where(eq(customerStreaksTable.id, streak.id));
 }
 
 function displayPrizeName(prize: StreakPrize | null): string {
-  if (prize?.discountPercent) {
-    return `${prize.discountPercent}% Off`;
-  }
+  if (prize?.discountPercent) return `${prize.discountPercent}% Off`;
   return prize?.name || "your foodie reward";
 }
 
 function generateStreakMessage(params: {
-  activeDays: number;
-  winningProgress: number;
-  cycleLength: number;
-  minDays: number;
+  ordersCompleted: number;
+  minOrders: number;
   daysLeft: number;
-  daysNeeded: number;
-  canStillWin: boolean;
+  ordersRemaining: number;
   isWinner: boolean;
   prize: StreakPrize | null;
   streakCode: string;
-  customerName: string;
   cycleEnded: boolean;
 }): StreakMessage {
-  const {
-    activeDays, winningProgress, cycleLength, minDays, daysLeft, daysNeeded,
-    canStillWin, isWinner, prize, streakCode, customerName, cycleEnded,
-  } = params;
+  const { ordersCompleted, minOrders, daysLeft, ordersRemaining, isWinner, prize, streakCode, cycleEnded } = params;
   const prizeName = displayPrizeName(prize);
+
   if (isWinner && prize) {
     return {
-      en: `🏆 FOODIE CHALLENGE COMPLETE!\nYou completed ${winningProgress}/${minDays} delicious days and scored ${prizeName}! Thank you for making TG's part of your week.\n\n🎫 Challenge code: ${streakCode}`,
-      am: `🏆 የትዕዛዝ ፈተናው ተጠናቀቀ!\nበዚህ ዙር ${winningProgress}/${minDays} ጣፋጭ ቀናት አጠናቀው ${prizeName} አሸንፈዋል! በየሳምንቱ ከTG's ጋር ስለሚያዝዙ እናመሰግናለን።\n\n🎫 የፈተና ኮድ: ${streakCode}`,
+      en: `🎉 FOODIE CHALLENGE COMPLETE!\nYou completed ${ordersCompleted}/${minOrders} orders and won ${prizeName}! Please claim your prize on your next visit.\n\n🎫 Challenge code: ${streakCode}`,
+      am: `🎉 የትዕዛዝ ፈተናው ተጠናቀቀ!\nበዚህ ዙር ${ordersCompleted}/${minOrders} የትዕዛዝ ጊዜ አጠናቀው ${prizeName} አሸንፈዋል! ሽልማትዎን ለመውሰድ በሚቀጥለው ጉብኝትዎ ይምጡ።\n\n🎫 የፈተና ኮድ: ${streakCode}`,
     };
   }
+
   if (cycleEnded) {
     return {
-      en: `This round wrapped at ${winningProgress}/${minDays} days. Your next foodie challenge starts with your next delicious order — see you soon!\n\n🎫 Challenge code: ${streakCode}`,
-      am: `ይህ ዙር ${winningProgress}/${minDays} ቀናት ላይ አብቅቷል። በሚቀጥለው ጣፋጭ ትዕዛዝዎ አዲስ የትዕዛዝ ፈተና ይጀምራል — በቅርቡ እንገናኝ!\n\n🎫 የፈተና ኮድ: ${streakCode}`,
+      en: `This round ended at ${ordersCompleted}/${minOrders} orders. Your next foodie challenge starts with your next delicious order — see you soon!\n\n🎫 Challenge code: ${streakCode}`,
+      am: `ይህ ዙር ${ordersCompleted}/${minOrders} የትዕዛዝ ጊዜ ላይ አብቅቷል። በሚቀጥለው ትዕዛዝዎ አዲስ የትዕዛዝ ፈተና ይጀምራል — በቅርቡ እንገናኝ!\n\n🎫 የፈተና ኮድ: ${streakCode}`,
     };
   }
-  if (daysNeeded === 0) {
+
+  if (ordersRemaining > 0) {
+    const orderWord = ordersRemaining === 1 ? "order" : "orders";
+    const orderWordAm = ordersRemaining === 1 ? "የትዕዛዝ ጊዜ" : "የትዕዛዝ ጊዜዎች";
     return {
-      en: `You're on a delicious roll! You've completed ${winningProgress}/${minDays} days this cycle. Keep the good food coming — ${daysLeft} ${daysLeft === 1 ? "day" : "days"} left to score ${prizeName}!\n\n🎫 Challenge code: ${streakCode}`,
-      am: `በጣፋጭ ጉዞ ላይ ነዎት! በዚህ ዙር ${winningProgress}/${minDays} ቀናት አጠናቀዋል። ${prizeName} ለማግኘት ${daysLeft} ቀን ቀርቷል — ጣፋጭ ትዕዛዝዎን ይቀጥሉ!\n\n🎫 የፈተና ኮድ: ${streakCode}`,
+      en: `Just ${ordersRemaining} more ${orderWord} of delicious meals to score ${prizeName}! You've completed ${ordersCompleted}/${minOrders} orders this cycle. See you next order!${daysLeft === 0 ? " Today is the final day." : ""}\n\n🎫 Challenge code: ${streakCode}`,
+      am: `${ordersRemaining} ${orderWordAm} ብቻ ${prizeName} ለማግኘት ቀርተዋል! በዚህ ዙር ${ordersCompleted}/${minOrders} አጠናቀዋል። በቀጣይ ትዕዛዝ እንገናኝ!${daysLeft === 0 ? " ዛሬ የመጨረሻ ቀን ነው።" : ""}\n\n🎫 የፈተና ኮድ: ${streakCode}`,
     };
   }
-  if (!canStillWin) {
-    return {
-      en: `You've completed ${winningProgress}/${minDays} days this cycle, but this round needs more days than the calendar has left. No stress — your next foodie challenge starts fresh with your next order!\n\n🎫 Challenge code: ${streakCode}`,
-      am: `በዚህ ዙር ${winningProgress}/${minDays} ቀናት አጠናቀዋል፤ ነገር ግን የቀሩት ቀናት ለማሸነፍ በቂ አይደሉም። ምንም አይደል — በሚቀጥለው ትዕዛዝዎ አዲስ የትዕዛዝ ፈተና ይጀምራል!\n\n🎫 የፈተና ኮድ: ${streakCode}`,
-    };
-  }
-  const dayPhraseEn = daysNeeded === 1 ? "Just 1 more delicious day" : `Just ${daysNeeded} more days of delicious meals`;
-  const dayPhraseAm = daysNeeded === 1 ? "አንድ ጣፋጭ ቀን ብቻ" : `${daysNeeded} ጣፋጭ ቀናት ብቻ`;
+
   return {
-    en: `${dayPhraseEn} to score ${prizeName}! You've completed ${winningProgress}/${minDays} days this cycle. See you tomorrow!\n\n🎫 Challenge code: ${streakCode}`,
-    am: `${dayPhraseAm} ${prizeName} ለማግኘት ቀርተዋል! በዚህ ዙር ${winningProgress}/${minDays} አጠናቀዋል። ነገም እንገናኝ!\n\n🎫 የፈተና ኮድ: ${streakCode}`,
+    en: `You're on a delicious roll! You've completed ${ordersCompleted}/${minOrders} orders this cycle. Keep the good food coming!\n\n🎫 Challenge code: ${streakCode}`,
+    am: `በጣፋጭ ጉዞ ላይ ነዎት! በዚህ ዙር ${ordersCompleted}/${minOrders} አጠናቀዋል። ጣፋጭ ትዕዛዝዎን ይቀጥሉ!\n\n🎫 የፈተና ኮድ: ${streakCode}`,
   };
 }
 
-async function notifyWinner(streak: CustomerStreak, prize: StreakPrize | null): Promise<void> {
+async function notifyWinner(streak: CustomerStreak, prize: StreakPrize | null, progress: StreakProgress): Promise<void> {
   if ((await getSetting("streak_auto_notification")) === "false" || !prize) return;
+  const target = streakOrderTarget(streak, prize);
   const message = generateStreakMessage({
-    activeDays: streak.activeDays,
-    winningProgress: streak.activeDays,
-    cycleLength: daysBetween(streak.cycleStartDate, streak.cycleEndDate) + 1,
-    minDays: prize.minDaysRequired,
+    ordersCompleted: progress.orderCount,
+    minOrders: target,
     daysLeft: 0,
-    daysNeeded: 0,
-    canStillWin: false,
+    ordersRemaining: 0,
     isWinner: true,
     prize,
     streakCode: streak.streakCode,
-    customerName: streak.customerName ?? "Customer",
     cycleEnded: true,
   });
   const result = await sendWhatsAppMessage(streak.customerPhone, `${message.am}\n\n${message.en}`);
@@ -253,39 +260,38 @@ async function notifyWinner(streak: CustomerStreak, prize: StreakPrize | null): 
 
 async function finalizeExpiredStreak(streak: CustomerStreak): Promise<void> {
   const prize = await getPrizeForStreak(streak);
-  const dates = await getActiveDates(streak.id);
-  const winningProgress = streak.streakMode === "consecutive" ? longestConsecutiveRun(dates) : dates.length;
-  if (winningProgress >= (prize?.minDaysRequired ?? DEFAULT_MIN_DAYS)) {
+  const progress = await getStreakProgress(streak);
+  const target = streakOrderTarget(streak, prize);
+  await syncStreakProgress(streak, progress);
+
+  if (progress.orderCount >= target) {
     const [won] = await db.update(customerStreaksTable)
-      .set({ status: "won", activeDays: dates.length, activeDayDates: dates, wonAt: new Date() })
+      .set({ status: "won", wonAt: new Date() })
       .where(and(eq(customerStreaksTable.id, streak.id), eq(customerStreaksTable.status, "active")))
       .returning();
-    if (won) await notifyWinner({ ...streak, ...won }, prize);
-  } else {
-    await db.update(customerStreaksTable)
-      .set({ status: "lost", activeDays: dates.length, activeDayDates: dates })
-      .where(and(eq(customerStreaksTable.id, streak.id), eq(customerStreaksTable.status, "active")));
-    if ((await getSetting("streak_reset_notification")) === "true") {
-      const resetMessage = generateStreakMessage({
-        activeDays: dates.length,
-        winningProgress,
-        cycleLength: prize?.cycleLengthDays ?? DEFAULT_CYCLE_LENGTH,
-        minDays: prize?.minDaysRequired ?? DEFAULT_MIN_DAYS,
-        daysLeft: 0,
-        daysNeeded: Math.max(0, (prize?.minDaysRequired ?? DEFAULT_MIN_DAYS) - winningProgress),
-        canStillWin: false,
-        isWinner: false,
-        prize,
-        streakCode: streak.streakCode,
-        customerName: streak.customerName ?? "Customer",
-        cycleEnded: true,
-      });
-      await sendWhatsAppMessage(streak.customerPhone, `${resetMessage.am}\n\n${resetMessage.en}`);
-    }
-    // Keep the completed cycle in history and make a fresh active cycle
-    // available immediately, as required by the reset rule.
-    await createNewStreak(streak.customerPhone, streak.customerName ?? "Customer", streak.branchId ?? 0, streak.streakCode);
+    if (won) await notifyWinner({ ...streak, ...won }, prize, progress);
+    return;
   }
+
+  await db.update(customerStreaksTable)
+    .set({ status: "lost" })
+    .where(and(eq(customerStreaksTable.id, streak.id), eq(customerStreaksTable.status, "active")));
+
+  if ((await getSetting("streak_reset_notification")) === "true") {
+    const resetMessage = generateStreakMessage({
+      ordersCompleted: progress.orderCount,
+      minOrders: target,
+      daysLeft: 0,
+      ordersRemaining: Math.max(0, target - progress.orderCount),
+      isWinner: false,
+      prize,
+      streakCode: streak.streakCode,
+      cycleEnded: true,
+    });
+    await sendWhatsAppMessage(streak.customerPhone, `${resetMessage.am}\n\n${resetMessage.en}`);
+  }
+  // Do not create the next cycle here. The next delivered order is what starts
+  // the next customer's challenge window.
 }
 
 export async function processDeliveryStreak(
@@ -299,10 +305,9 @@ export async function processDeliveryStreak(
   if (!phone) return null;
   const today = todayUAE();
   let streak = await getActiveStreak(phone);
+
   if (streak && dayNumber(today) > dayNumber(streak.cycleEndDate)) {
     await finalizeExpiredStreak(streak);
-    // A loss creates the next active cycle immediately; a win waits for the
-    // next order so the winner remains the public snapshot until then.
     streak = await getActiveStreak(phone);
   }
   if (!streak) {
@@ -315,56 +320,57 @@ export async function processDeliveryStreak(
     activeDate: today,
     orderId,
   }).onConflictDoNothing();
-  const activeDates = await getActiveDates(streak.id);
+
+  const progress = await getStreakProgress(streak);
   const prize = await getPrizeForStreak(streak);
-  const cycleLength = prize?.cycleLengthDays ?? daysBetween(streak.cycleStartDate, streak.cycleEndDate) + 1;
-  const minDays = prize?.minDaysRequired ?? DEFAULT_MIN_DAYS;
-  const winningProgress = streak.streakMode === "consecutive" ? longestConsecutiveRun(activeDates) : activeDates.length;
-  const cycleEnded = dayNumber(today) >= dayNumber(streak.cycleEndDate);
-  const isWinner = cycleEnded && winningProgress >= minDays;
+  const cycleLength = daysBetween(streak.cycleStartDate, streak.cycleEndDate) + 1;
+  const minOrders = streakOrderTarget(streak, prize);
+  const cycleEnded = dayNumber(today) > dayNumber(streak.cycleEndDate);
+  const isWinner = !cycleEnded && progress.orderCount >= minOrders;
   const daysLeft = daysBetween(today, streak.cycleEndDate);
-  const daysNeeded = Math.max(0, minDays - winningProgress);
-  const canStillWin = daysNeeded <= daysLeft;
+  const ordersRemaining = Math.max(0, minOrders - progress.orderCount);
 
   if (isWinner) {
     const [won] = await db.update(customerStreaksTable)
-      .set({ activeDays: activeDates.length, activeDayDates: activeDates, status: "won", wonAt: new Date() })
+      .set({
+        activeDays: progress.activeDates.length,
+        orderCount: progress.orderCount,
+        activeDayDates: progress.activeDates,
+        status: "won",
+        wonAt: new Date(),
+        updatedAt: new Date(),
+      })
       .where(and(eq(customerStreaksTable.id, streak.id), eq(customerStreaksTable.status, "active")))
       .returning();
-    if (won) await notifyWinner({ ...streak, ...won }, prize);
+    if (won) await notifyWinner({ ...streak, ...won }, prize, progress);
   } else {
-    await db.update(customerStreaksTable).set({
-      activeDays: activeDates.length,
-      activeDayDates: activeDates,
-      updatedAt: new Date(),
-    }).where(eq(customerStreaksTable.id, streak.id));
+    await syncStreakProgress(streak, progress);
   }
 
   return {
     streakCode: streak.streakCode,
-    activeDays: activeDates.length,
-    winningProgress,
+    activeDays: progress.activeDates.length,
+    ordersCompleted: progress.orderCount,
+    winningProgress: progress.orderCount,
     cycleLength,
-    minDays,
+    minOrders,
+    minDays: minOrders,
     daysLeft,
-    daysNeeded,
+    ordersRemaining,
+    daysNeeded: ordersRemaining,
     isWinner,
     prize,
     status: isWinner ? "won" : "active",
     cycleStartDate: streak.cycleStartDate,
     cycleEndDate: streak.cycleEndDate,
     message: generateStreakMessage({
-      activeDays: activeDates.length,
-      winningProgress,
-      cycleLength,
-      minDays,
+      ordersCompleted: progress.orderCount,
+      minOrders,
       daysLeft,
-      daysNeeded,
-      canStillWin,
+      ordersRemaining,
       isWinner,
       prize,
       streakCode: streak.streakCode,
-      customerName: streak.customerName ?? customerName ?? "Customer",
       cycleEnded,
     }),
   };
@@ -373,44 +379,52 @@ export async function processDeliveryStreak(
 export async function getStreakSnapshot(phone: string): Promise<StreakSnapshot | null> {
   const normalized = normalizePhone(phone);
   if (!normalized) return null;
-  const rows = await db.select().from(customerStreaksTable)
+  let rows = await db.select().from(customerStreaksTable)
     .where(eq(customerStreaksTable.customerPhone, normalized))
     .orderBy(desc(customerStreaksTable.updatedAt), desc(customerStreaksTable.id))
     .limit(5);
-  const streak = rows.find(row => row.status === "active") ?? rows[0];
+  let streak = rows.find(row => row.status === "active") ?? rows[0];
   if (!streak) return null;
+
+  if (streak.status === "active" && dayNumber(todayUAE()) > dayNumber(streak.cycleEndDate)) {
+    await finalizeExpiredStreak(streak);
+    rows = await db.select().from(customerStreaksTable)
+      .where(eq(customerStreaksTable.customerPhone, normalized))
+      .orderBy(desc(customerStreaksTable.updatedAt), desc(customerStreaksTable.id))
+      .limit(5);
+    streak = rows.find(row => row.status === "active") ?? rows[0];
+    if (!streak) return null;
+  }
+
   const prize = await getPrizeForStreak(streak);
-  const winningProgress = streak.streakMode === "consecutive"
-    ? longestConsecutiveRun(streak.activeDayDates)
-    : streak.activeDayDates.length;
-  const minDays = prize?.minDaysRequired ?? DEFAULT_MIN_DAYS;
+  const progress = await getStreakProgress(streak);
+  const minOrders = streakOrderTarget(streak, prize);
   const daysLeft = streak.status === "active" ? daysBetween(todayUAE(), streak.cycleEndDate) : 0;
-  const daysNeeded = Math.max(0, minDays - winningProgress);
+  const ordersRemaining = Math.max(0, minOrders - progress.orderCount);
   return {
     streakCode: streak.streakCode,
-    activeDays: streak.activeDays,
-    winningProgress,
-    cycleLength: prize?.cycleLengthDays ?? daysBetween(streak.cycleStartDate, streak.cycleEndDate) + 1,
-    minDays,
+    activeDays: progress.activeDates.length,
+    ordersCompleted: progress.orderCount,
+    winningProgress: progress.orderCount,
+    cycleLength: daysBetween(streak.cycleStartDate, streak.cycleEndDate) + 1,
+    minOrders,
+    minDays: minOrders,
     daysLeft,
-    daysNeeded,
+    ordersRemaining,
+    daysNeeded: ordersRemaining,
     isWinner: streak.status === "won",
     prize,
     status: streak.status,
     cycleStartDate: streak.cycleStartDate,
     cycleEndDate: streak.cycleEndDate,
     message: generateStreakMessage({
-      activeDays: streak.activeDays,
-      winningProgress,
-      cycleLength: prize?.cycleLengthDays ?? daysBetween(streak.cycleStartDate, streak.cycleEndDate) + 1,
-      minDays,
+      ordersCompleted: progress.orderCount,
+      minOrders,
       daysLeft,
-      daysNeeded,
-      canStillWin: daysNeeded <= daysLeft,
+      ordersRemaining,
       isWinner: streak.status === "won",
       prize,
       streakCode: streak.streakCode,
-      customerName: streak.customerName ?? "Customer",
       cycleEnded: streak.status !== "active",
     }),
     customerName: streak.customerName,
@@ -420,8 +434,9 @@ export async function getStreakSnapshot(phone: string): Promise<StreakSnapshot |
 
 export async function processEndingStreaks(): Promise<number> {
   const today = todayUAE();
-  const ending = await db.select().from(customerStreaksTable)
-    .where(and(eq(customerStreaksTable.cycleEndDate, today), eq(customerStreaksTable.status, "active")));
+  const ending = await db.select().from(customerStreaksTable).where(
+    and(lt(customerStreaksTable.cycleEndDate, today), eq(customerStreaksTable.status, "active")),
+  );
   for (const streak of ending) await finalizeExpiredStreak(streak);
   return ending.length;
 }

@@ -138,8 +138,8 @@ async function seed() {
   const existingStreakPrizes = await db.select({ id: streakPrizesTable.id }).from(streakPrizesTable);
   if (existingStreakPrizes.length === 0) {
     await db.insert(streakPrizesTable).values([
-      { name: "Free Meal", description: "One free meal of your choice", prizeType: "free_meal", minDaysRequired: 7, cycleLengthDays: 7, streakMode: "window", isActive: true },
-      { name: "50% Discount", description: "50% off your next order", prizeType: "discount_percent", discountPercent: 50, minDaysRequired: 4, cycleLengthDays: 7, streakMode: "window", isActive: true },
+      { name: "Free Meal", description: "One free meal of your choice", prizeType: "free_meal", minDaysRequired: 7, minOrdersRequired: 6, cycleLengthDays: 7, streakMode: "window", isActive: true },
+      { name: "50% Discount", description: "50% off your next order", prizeType: "discount_percent", discountPercent: 50, minDaysRequired: 4, minOrdersRequired: 4, cycleLengthDays: 7, streakMode: "window", isActive: true },
     ]);
     console.log("Streak prizes seeded");
   } else {
