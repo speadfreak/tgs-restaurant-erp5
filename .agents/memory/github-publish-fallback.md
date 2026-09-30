@@ -7,4 +7,4 @@ When the local GitHub remote rejects authentication, use the attached GitHub int
 
 **Why:** The workspace may have a valid Replit GitHub connection even when the shell's HTTPS remote has no usable credential helper. The parent check prevents overwriting unrelated remote work.
 
-**How to apply:** Use only for an explicitly requested repository push. Keep credentials inside the connector proxy and do not ask the user to paste a token.
+**How to apply:** Use only for an explicitly requested repository push. Keep credentials inside the connector proxy and do not ask the user to paste a token. For large files, read the full file directly; shell output can truncate base64 payloads and silently corrupt remote blobs.
