@@ -8,3 +8,4 @@
 - [Express 5 OPTIONS wildcard](express5-options.md) — app.options('*', cors()) works in Express 5.2.1 without issue; seed: tables without unique constraints need existence checks, not bare onConflictDoNothing.
 - [Express router mount-order role gate bug](express-router-path-scoping.md) — router.use(authenticate, requireRole(...)) with no path arg leaks its gate onto later-mounted sibling routers.
 - [GitHub publish fallback](github-publish-fallback.md) — when shell git push lacks credentials, a connected GitHub integration can safely fast-forward main through the Git data API.
+- [Loyalty challenge snapshots](loyalty-challenge-settings.md) — active and historical challenges must retain their order target after catalogue edits
