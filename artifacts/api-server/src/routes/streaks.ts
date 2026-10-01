@@ -1,16 +1,21 @@
 import { Router, type Request } from "express";
-import { and, desc, eq, isNotNull, isNull, or } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, or } from "drizzle-orm";
 import {
   db,
   customersTable,
   customerStreaksTable,
+  ordersTable,
+  orderStatusHistoryTable,
   streakActiveDaysTable,
   streakPrizesTable,
 } from "@workspace/db";
 import { authenticate, requireRole, ADMIN_ROLES } from "../middlewares/auth";
 import {
+  displayCustomerStreakIdentity,
   getActivePrize,
   getStreakSnapshot,
+  processDeliveryStreak,
+  resolveCustomerStreakIdentity,
 } from "../lib/streak-engine";
 
 const router: Router = Router();
@@ -30,6 +35,79 @@ function sameBranchScope(branchId: number | null) {
   return branchId === null
     ? isNull(streakPrizesTable.branchId)
     : eq(streakPrizesTable.branchId, branchId);
+}
+
+let recentNameBackfill: Promise<number> | null = null;
+
+async function backfillRecentNamedDeliveries(branchId?: number): Promise<number> {
+  if (recentNameBackfill) return recentNameBackfill;
+
+  recentNameBackfill = (async () => {
+    const cutoff = new Date(Date.now() - 90 * 86_400_000);
+    const deliveredOrders = await db.select({
+      orderId: ordersTable.id,
+      branchId: ordersTable.branchId,
+      customerPhoneDirect: ordersTable.customerPhoneDirect,
+      customerNameDirect: ordersTable.customerNameDirect,
+      profilePhone: customersTable.phone,
+      profileName: customersTable.name,
+      deliveredAt: orderStatusHistoryTable.changedAt,
+    })
+      .from(ordersTable)
+      .innerJoin(orderStatusHistoryTable, and(
+        eq(orderStatusHistoryTable.orderId, ordersTable.id),
+        eq(orderStatusHistoryTable.status, "delivered"),
+      ))
+      .leftJoin(customersTable, eq(customersTable.id, ordersTable.customerId))
+      .leftJoin(streakActiveDaysTable, eq(streakActiveDaysTable.orderId, ordersTable.id))
+      .where(and(
+        eq(ordersTable.status, "delivered"),
+        gte(orderStatusHistoryTable.changedAt, cutoff),
+        isNull(streakActiveDaysTable.id),
+        branchId === undefined ? undefined : eq(ordersTable.branchId, branchId),
+      ))
+      .orderBy(asc(orderStatusHistoryTable.changedAt), asc(ordersTable.id))
+      .limit(1000);
+
+    const candidates: { order: typeof deliveredOrders[number]; name: string; identity: string }[] = [];
+    const seenOrderIds = new Set<number>();
+    for (const order of deliveredOrders) {
+      if (seenOrderIds.has(order.orderId)) continue;
+      seenOrderIds.add(order.orderId);
+
+      const phone = order.customerPhoneDirect?.trim() || order.profilePhone?.trim() || null;
+      const name = order.customerNameDirect?.trim() || order.profileName?.trim() || "";
+      const identity = resolveCustomerStreakIdentity(phone, name);
+      if (identity.startsWith("name:")) candidates.push({ order, name, identity });
+    }
+    if (candidates.length === 0) return 0;
+
+    const identities = [...new Set(candidates.map(candidate => candidate.identity))];
+    const existingStreaks = await db.select({ customerPhone: customerStreaksTable.customerPhone })
+      .from(customerStreaksTable)
+      .where(inArray(customerStreaksTable.customerPhone, identities));
+    const existingIdentities = new Set(existingStreaks.map(streak => streak.customerPhone));
+
+    let backfilled = 0;
+    for (const { order, name, identity } of candidates) {
+      if (existingIdentities.has(identity)) continue;
+      const result = await processDeliveryStreak(
+        order.orderId,
+        identity,
+        name || identity.slice("name:".length),
+        order.branchId,
+        { deliveredAt: order.deliveredAt, suppressNotifications: true },
+      );
+      if (result) backfilled++;
+    }
+    return backfilled;
+  })();
+
+  try {
+    return await recentNameBackfill;
+  } finally {
+    recentNameBackfill = null;
+  }
 }
 
 function statusLabel(streak: typeof customerStreaksTable.$inferSelect, minOrders: number): string {
@@ -56,7 +134,7 @@ async function mapStreak(streak: typeof customerStreaksTable.$inferSelect) {
   return {
     id: streak.id,
     customerName: streak.customerName,
-    customerPhone: streak.customerPhone,
+    customerPhone: displayCustomerStreakIdentity(streak.customerPhone, streak.customerName),
     streakCode: streak.streakCode,
     branchId: streak.branchId,
     cycleStartDate: streak.cycleStartDate,
@@ -144,6 +222,12 @@ router.post("/streaks/reset", async (req, res): Promise<void> => {
 
 router.get("/streaks/dashboard", async (req, res): Promise<void> => {
   const branchId = scopedBranchId(req);
+  try {
+    const backfilled = await backfillRecentNamedDeliveries(branchId);
+    if (backfilled > 0) req.log.info({ backfilled }, "Recovered untracked name-based loyalty orders");
+  } catch (error) {
+    req.log.warn({ error }, "Could not recover untracked name-based loyalty orders");
+  }
   const filters = [eq(customerStreaksTable.status, "active")];
   if (branchId !== undefined) filters.push(eq(customerStreaksTable.branchId, branchId));
   const active = await db.select().from(customerStreaksTable).where(and(...filters)).orderBy(desc(customerStreaksTable.updatedAt));
@@ -170,6 +254,12 @@ router.get("/streaks/dashboard", async (req, res): Promise<void> => {
 
 router.get("/streaks", async (req, res): Promise<void> => {
   const branchId = scopedBranchId(req);
+  try {
+    const backfilled = await backfillRecentNamedDeliveries(branchId);
+    if (backfilled > 0) req.log.info({ backfilled }, "Recovered untracked name-based loyalty orders");
+  } catch (error) {
+    req.log.warn({ error }, "Could not recover untracked name-based loyalty orders");
+  }
   const conditions = [];
   if (branchId !== undefined) conditions.push(eq(customerStreaksTable.branchId, branchId));
   const status = typeof req.query.status === "string" ? req.query.status : undefined;

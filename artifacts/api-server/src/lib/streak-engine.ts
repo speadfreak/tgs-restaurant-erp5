@@ -49,7 +49,11 @@ type StreakProgress = {
 };
 
 function todayUAE(): string {
-  return new Date().toLocaleDateString("en-CA", { timeZone: UAE_TIMEZONE });
+  return dateInUAE(new Date());
+}
+
+function dateInUAE(value: Date): string {
+  return value.toLocaleDateString("en-CA", { timeZone: UAE_TIMEZONE });
 }
 
 function dayNumber(value: string): number {
@@ -71,12 +75,44 @@ function daysBetween(from: string, to: string): number {
 }
 
 function normalizePhone(phone: string): string {
-  return phone.replace(/^whatsapp:/i, "").replace(/[^\d+]/g, "");
+  const value = phone.replace(/^whatsapp:/i, "");
+  if (/\p{L}/u.test(value)) return "";
+  return value.replace(/[^\d+]/g, "");
 }
 
 function isHumanCustomerName(value: string | null | undefined): boolean {
   const name = value?.trim() ?? "";
   return Boolean(name && /\p{L}/u.test(name) && !/^customer(?:\s*#.*)?$/i.test(name));
+}
+
+function nameIdentity(value: string | null | undefined): string {
+  const name = value?.normalize("NFKC").trim().replace(/\s+/g, " ").toLocaleLowerCase("en") ?? "";
+  return isHumanCustomerName(name) ? `name:${name}` : "";
+}
+
+export function resolveCustomerStreakIdentity(
+  phoneOrName: string | null | undefined,
+  customerName: string | null | undefined,
+): string {
+  const raw = phoneOrName?.trim().replace(/^whatsapp:/i, "") ?? "";
+  if (raw.startsWith("name:")) return nameIdentity(raw.slice("name:".length));
+  if (raw) {
+    const phone = normalizePhone(raw);
+    if (phone) return phone;
+    return nameIdentity(isHumanCustomerName(customerName) ? customerName : raw);
+  }
+  const name = customerName?.trim() ?? "";
+  return normalizePhone(name) || nameIdentity(name);
+}
+
+export function displayCustomerStreakIdentity(identity: string, customerName: string | null): string {
+  return identity.startsWith("name:")
+    ? customerName?.trim() || identity.slice("name:".length)
+    : identity;
+}
+
+function isPhoneIdentity(identity: string): boolean {
+  return !identity.startsWith("name:") && /^\+?\d+$/.test(identity);
 }
 
 function createStreakCode(): string {
@@ -103,8 +139,19 @@ export async function getActivePrize(branchId: number): Promise<StreakPrize | nu
 }
 
 async function ensureCustomerCode(phone: string, name: string): Promise<string> {
-  const [customer] = await db.select().from(customersTable).where(eq(customersTable.phone, phone));
+  const isName = phone.startsWith("name:");
+  const [customer] = isName
+    ? [undefined]
+    : await db.select().from(customersTable).where(eq(customersTable.phone, phone));
   if (customer?.streakCode) return customer.streakCode;
+  if (isName) {
+    const [previousStreak] = await db.select({ streakCode: customerStreaksTable.streakCode })
+      .from(customerStreaksTable)
+      .where(eq(customerStreaksTable.customerPhone, phone))
+      .orderBy(desc(customerStreaksTable.updatedAt), desc(customerStreaksTable.id))
+      .limit(1);
+    if (previousStreak?.streakCode) return previousStreak.streakCode;
+  }
 
   let code = createStreakCode();
   for (let attempt = 0; attempt < 5; attempt++) {
@@ -116,7 +163,7 @@ async function ensureCustomerCode(phone: string, name: string): Promise<string> 
   }
   if (customer) {
     await db.update(customersTable).set({ streakCode: code }).where(eq(customersTable.id, customer.id));
-  } else {
+  } else if (!isName) {
     try {
       await db.insert(customersTable).values({ name: name || "Customer", phone, streakCode: code });
     } catch {
@@ -134,11 +181,17 @@ export async function getActiveStreak(phone: string): Promise<CustomerStreak | n
   return streak ?? null;
 }
 
-async function createNewStreak(phone: string, name: string, branchId: number, code?: string): Promise<CustomerStreak> {
+async function createNewStreak(
+  phone: string,
+  name: string,
+  branchId: number,
+  code?: string,
+  startDate = todayUAE(),
+): Promise<CustomerStreak> {
   const prize = await getActivePrize(branchId);
   const targetOrders = prizeOrderTarget(prize);
   const cycleLength = prize?.cycleLengthDays ?? (Number(await getSetting("streak_default_cycle_length")) || DEFAULT_CYCLE_LENGTH);
-  const start = todayUAE();
+  const start = startDate;
   const customerName = name.trim() || "Customer";
   const [streak] = await db.insert(customerStreaksTable).values({
     customerPhone: phone,
@@ -156,9 +209,11 @@ async function createNewStreak(phone: string, name: string, branchId: number, co
     prizeId: prize?.id ?? null,
   }).returning();
   if (!streak) throw new Error("Could not create customer challenge");
-  const [customer] = await db.select({ id: customersTable.id })
-    .from(customersTable)
-    .where(eq(customersTable.phone, phone));
+  const [customer] = phone.startsWith("name:")
+    ? [undefined]
+    : await db.select({ id: customersTable.id })
+      .from(customersTable)
+      .where(eq(customersTable.phone, phone));
   if (customer) {
     await db.update(customersTable)
       .set({ currentStreakId: streak.id, streakCode: streak.streakCode })
@@ -246,7 +301,7 @@ function generateStreakMessage(params: {
 }
 
 async function notifyWinner(streak: CustomerStreak, prize: StreakPrize | null, progress: StreakProgress): Promise<void> {
-  if ((await getSetting("streak_auto_notification")) === "false" || !prize) return;
+  if (!isPhoneIdentity(streak.customerPhone) || (await getSetting("streak_auto_notification")) === "false" || !prize) return;
   const target = streakOrderTarget(streak, prize);
   const message = generateStreakMessage({
     ordersCompleted: progress.orderCount,
@@ -264,7 +319,7 @@ async function notifyWinner(streak: CustomerStreak, prize: StreakPrize | null, p
   }
 }
 
-async function finalizeExpiredStreak(streak: CustomerStreak): Promise<void> {
+async function finalizeExpiredStreak(streak: CustomerStreak, sendNotifications = true): Promise<void> {
   const prize = await getPrizeForStreak(streak);
   const progress = await getStreakProgress(streak);
   const target = streakOrderTarget(streak, prize);
@@ -275,7 +330,7 @@ async function finalizeExpiredStreak(streak: CustomerStreak): Promise<void> {
       .set({ status: "won", wonAt: new Date() })
       .where(and(eq(customerStreaksTable.id, streak.id), eq(customerStreaksTable.status, "active")))
       .returning();
-    if (won) await notifyWinner({ ...streak, ...won }, prize, progress);
+    if (won && sendNotifications) await notifyWinner({ ...streak, ...won }, prize, progress);
     return;
   }
 
@@ -283,7 +338,7 @@ async function finalizeExpiredStreak(streak: CustomerStreak): Promise<void> {
     .set({ status: "lost" })
     .where(and(eq(customerStreaksTable.id, streak.id), eq(customerStreaksTable.status, "active")));
 
-  if ((await getSetting("streak_reset_notification")) === "true") {
+  if (sendNotifications && isPhoneIdentity(streak.customerPhone) && (await getSetting("streak_reset_notification")) === "true") {
     const resetMessage = generateStreakMessage({
       ordersCompleted: progress.orderCount,
       minOrders: target,
@@ -305,21 +360,25 @@ export async function processDeliveryStreak(
   customerPhone: string,
   customerName: string,
   branchId: number,
+  options: { deliveredAt?: Date; suppressNotifications?: boolean } = {},
 ): Promise<StreakResult | null> {
   if ((await getSetting("streak_enabled")) === "false") return null;
-  const phone = normalizePhone(customerPhone);
+  const phone = resolveCustomerStreakIdentity(customerPhone, customerName);
   if (!phone) return null;
-  const displayName = customerName.trim();
-  const today = todayUAE();
+  const displayName = phone.startsWith("name:")
+    ? isHumanCustomerName(customerName) ? customerName.trim() : phone.slice("name:".length)
+    : customerName.trim() || "Customer";
+  const today = options.deliveredAt ? dateInUAE(options.deliveredAt) : todayUAE();
   let streak = await getActiveStreak(phone);
 
   if (streak && dayNumber(today) > dayNumber(streak.cycleEndDate)) {
-    await finalizeExpiredStreak(streak);
+    await finalizeExpiredStreak(streak, !options.suppressNotifications);
     streak = await getActiveStreak(phone);
   }
+  if (streak && dayNumber(today) < dayNumber(streak.cycleStartDate)) return null;
   if (!streak) {
     const code = await ensureCustomerCode(phone, displayName);
-    streak = await createNewStreak(phone, displayName, branchId, code);
+    streak = await createNewStreak(phone, displayName, branchId, code, today);
   }
   if (isHumanCustomerName(displayName) && !isHumanCustomerName(streak.customerName)) {
     await db.update(customerStreaksTable)
@@ -355,7 +414,7 @@ export async function processDeliveryStreak(
       })
       .where(and(eq(customerStreaksTable.id, streak.id), eq(customerStreaksTable.status, "active")))
       .returning();
-    if (won) await notifyWinner({ ...streak, ...won }, prize, progress);
+    if (won && !options.suppressNotifications) await notifyWinner({ ...streak, ...won }, prize, progress);
   } else {
     await syncStreakProgress(streak, progress);
   }
@@ -390,7 +449,7 @@ export async function processDeliveryStreak(
 }
 
 export async function getStreakSnapshot(phone: string): Promise<StreakSnapshot | null> {
-  const normalized = normalizePhone(phone);
+  const normalized = resolveCustomerStreakIdentity(phone, null);
   if (!normalized) return null;
   let rows = await db.select().from(customerStreaksTable)
     .where(eq(customerStreaksTable.customerPhone, normalized))
@@ -441,7 +500,7 @@ export async function getStreakSnapshot(phone: string): Promise<StreakSnapshot |
       cycleEnded: streak.status !== "active",
     }),
     customerName: streak.customerName,
-    customerPhone: streak.customerPhone,
+    customerPhone: displayCustomerStreakIdentity(streak.customerPhone, streak.customerName),
   };
 }
 

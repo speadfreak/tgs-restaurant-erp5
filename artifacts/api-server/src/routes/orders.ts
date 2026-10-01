@@ -27,7 +27,12 @@ import {
 import { getIO } from "../lib/socket";
 import { authenticate, authenticateOptional, requireRole, ADMIN_ROLES, KITCHEN_ROLES, DELIVERY_ROLES, ORDER_INTAKE_ROLES } from "../middlewares/auth";
 import { ensureLotteryEntriesForOrder, uaeDate } from "../lib/lottery-entries";
-import { getStreakSnapshot, processDeliveryStreak, type StreakResult } from "../lib/streak-engine";
+import {
+  getStreakSnapshot,
+  processDeliveryStreak,
+  resolveCustomerStreakIdentity,
+  type StreakResult,
+} from "../lib/streak-engine";
 
 const router: Router = Router();
 
@@ -382,9 +387,9 @@ router.get("/kitchen/queue", authenticate, requireRole(...KITCHEN_ROLES), async 
     const customer = order.customerId
       ? (await db.select().from(customersTable).where(eq(customersTable.id, order.customerId)))[0]
       : null;
-    const streakInfo = (order.customerPhoneDirect ?? customer?.phone)
-      ? await getStreakSnapshot(order.customerPhoneDirect ?? customer!.phone!).catch(() => null)
-      : null;
+    const customerName = order.customerNameDirect ?? customer?.name ?? null;
+    const customerIdentity = resolveCustomerStreakIdentity(order.customerPhoneDirect ?? customer?.phone, customerName);
+    const streakInfo = customerIdentity ? await getStreakSnapshot(customerIdentity).catch(() => null) : null;
     const elapsedMinutes = Math.floor((Date.now() - order.createdAt.getTime()) / 60000);
     return {
       id: order.id,
@@ -392,7 +397,7 @@ router.get("/kitchen/queue", authenticate, requireRole(...KITCHEN_ROLES), async 
       status: order.status,
       channel: order.channel,
       elapsedMinutes,
-      customerName: order.customerNameDirect ?? customer?.name ?? null,
+      customerName,
       deliveryAddress: order.deliveryAddress ?? customer?.address ?? null,
       relayedByUserId: order.relayedByUserId ?? null,
       notes: null,
@@ -596,13 +601,15 @@ router.get("/delivery/queue", authenticate, requireRole(...DELIVERY_ROLES), asyn
       ? (await db.select().from(customersTable).where(eq(customersTable.id, order.customerId)))[0]
       : null;
     const customerPhone = order.customerPhoneDirect ?? customer?.phone ?? null;
-    const streakInfo = customerPhone ? await getStreakSnapshot(customerPhone).catch(() => null) : null;
+    const customerName = order.customerNameDirect ?? customer?.name ?? null;
+    const customerIdentity = resolveCustomerStreakIdentity(customerPhone, customerName);
+    const streakInfo = customerIdentity ? await getStreakSnapshot(customerIdentity).catch(() => null) : null;
     return {
       id: order.id,
       orderCode: order.orderCode,
       status: order.status,
       channel: order.channel,
-      customerName: order.customerNameDirect ?? customer?.name ?? null,
+      customerName,
       customerPhone,
       deliveryAddress: order.deliveryAddress ?? customer?.address ?? null,
       relayedByUserId: order.relayedByUserId ?? null,
@@ -775,18 +782,15 @@ router.post("/delivery/orders/:id/complete", authenticate, requireRole(...DELIVE
           name: customersTable.name,
         }).from(customersTable).where(eq(customersTable.id, order.customerId)))[0]
         : null;
-      const customerPhone = order.customerPhoneDirect?.trim() || (
-        order.customerId
-          ? customer?.phone
-          : null
-      );
-      if (customerPhone) {
-        const customerName = order.customerNameDirect?.trim()
-          || customer?.name?.trim()
-          || `Customer #${order.customerId ?? "guest"}`;
+      const customerPhone = order.customerPhoneDirect?.trim() || customer?.phone?.trim() || null;
+      const customerName = order.customerNameDirect?.trim()
+        || customer?.name?.trim()
+        || `Customer #${order.customerId ?? "guest"}`;
+      const customerIdentity = resolveCustomerStreakIdentity(customerPhone, customerName);
+      if (customerIdentity) {
         streakInfo = await processDeliveryStreak(
           order.id,
-          customerPhone,
+          customerIdentity,
           customerName,
           order.branchId,
         );
