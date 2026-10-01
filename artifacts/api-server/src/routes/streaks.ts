@@ -1,8 +1,10 @@
 import { Router, type Request } from "express";
-import { and, desc, eq, isNull, or } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, or } from "drizzle-orm";
 import {
   db,
+  customersTable,
   customerStreaksTable,
+  streakActiveDaysTable,
   streakPrizesTable,
 } from "@workspace/db";
 import { authenticate, requireRole, ADMIN_ROLES } from "../middlewares/auth";
@@ -22,6 +24,12 @@ function scopedBranchId(req: Request): number | undefined {
   const raw = req.query.branchId;
   const parsed = raw === undefined ? undefined : Number(raw);
   return parsed !== undefined && Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function sameBranchScope(branchId: number | null) {
+  return branchId === null
+    ? isNull(streakPrizesTable.branchId)
+    : eq(streakPrizesTable.branchId, branchId);
 }
 
 function statusLabel(streak: typeof customerStreaksTable.$inferSelect, minOrders: number): string {
@@ -98,6 +106,42 @@ router.get("/streaks/lookup", async (req, res): Promise<void> => {
 
 router.use("/streaks", authenticate, requireRole(...ADMIN_ROLES));
 
+router.post("/streaks/reset", async (req, res): Promise<void> => {
+  if (req.user?.role !== "super_admin") {
+    res.status(403).json({ error: "Only a super admin can reset the loyalty system" });
+    return;
+  }
+  if (req.body?.confirmation !== "RESET") {
+    res.status(400).json({ error: 'Type "RESET" to confirm this operation' });
+    return;
+  }
+
+  const summary = await db.transaction(async (tx) => {
+    const progressRows = await tx.delete(streakActiveDaysTable)
+      .returning({ id: streakActiveDaysTable.id });
+    const challengeRows = await tx.delete(customerStreaksTable)
+      .returning({ id: customerStreaksTable.id });
+    const customerRows = await tx.update(customersTable)
+      .set({ streakCode: null, currentStreakId: null })
+      .where(or(
+        isNotNull(customersTable.streakCode),
+        isNotNull(customersTable.currentStreakId),
+      ))
+      .returning({ id: customersTable.id });
+
+    return {
+      deletedOrderProgress: progressRows.length,
+      deletedChallenges: challengeRows.length,
+      clearedCustomerLoyaltyRecords: customerRows.length,
+    };
+  });
+
+  res.json({
+    ...summary,
+    message: "Loyalty challenges and progress have been reset. The prize catalogue and ERP records were kept.",
+  });
+});
+
 router.get("/streaks/dashboard", async (req, res): Promise<void> => {
   const branchId = scopedBranchId(req);
   const filters = [eq(customerStreaksTable.status, "active")];
@@ -169,6 +213,7 @@ router.post("/streaks/prizes", async (req, res): Promise<void> => {
   } = req.body ?? {};
   const minOrders = Number(minOrdersRequired ?? minDaysRequired ?? 6);
   const cycleLength = Number(cycleLengthDays);
+  const parsedBranchId = branchId == null ? null : Number(branchId);
   if (typeof name !== "string" || !name.trim()) {
     res.status(400).json({ error: "Prize name is required" });
     return;
@@ -181,24 +226,41 @@ router.post("/streaks/prizes", async (req, res): Promise<void> => {
     res.status(400).json({ error: "Streak mode must be window or consecutive" });
     return;
   }
-  if (req.user?.role === "branch_manager" && branchId !== req.user.branchId) {
+  if (branchId != null && (!Number.isInteger(parsedBranchId) || parsedBranchId! < 1)) {
+    res.status(400).json({ error: "Invalid branch id" });
+    return;
+  }
+  if (req.user?.role === "branch_manager" && parsedBranchId !== req.user.branchId) {
     res.status(403).json({ error: "Branch managers can only configure their own branch" });
     return;
   }
-  const [prize] = await db.insert(streakPrizesTable).values({
-    name: name.trim(),
-    description: typeof description === "string" ? description : null,
-    prizeType,
-    discountPercent: discountPercent == null ? null : Number(discountPercent),
-    freeItemName: typeof freeItemName === "string" ? freeItemName : null,
-    customDescription: typeof customDescription === "string" ? customDescription : null,
-    minDaysRequired: minOrders,
-    minOrdersRequired: minOrders,
-    cycleLengthDays: cycleLength,
-    streakMode,
-    isActive: Boolean(isActive),
-    branchId: branchId == null ? null : Number(branchId),
-  }).returning();
+  const active = typeof isActive === "boolean" ? isActive : true;
+  const prize = await db.transaction(async (tx) => {
+    if (active) {
+      await tx.update(streakPrizesTable)
+        .set({ isActive: false })
+        .where(and(
+          eq(streakPrizesTable.isActive, true),
+          isNull(streakPrizesTable.archivedAt),
+          sameBranchScope(parsedBranchId),
+        ));
+    }
+    const [created] = await tx.insert(streakPrizesTable).values({
+      name: name.trim(),
+      description: typeof description === "string" ? description : null,
+      prizeType,
+      discountPercent: discountPercent == null ? null : Number(discountPercent),
+      freeItemName: typeof freeItemName === "string" ? freeItemName : null,
+      customDescription: typeof customDescription === "string" ? customDescription : null,
+      minDaysRequired: minOrders,
+      minOrdersRequired: minOrders,
+      cycleLengthDays: cycleLength,
+      streakMode,
+      isActive: active,
+      branchId: parsedBranchId,
+    }).returning();
+    return created;
+  });
   res.status(201).json(prize);
 });
 
@@ -217,7 +279,7 @@ router.patch("/streaks/prizes/:id", async (req, res): Promise<void> => {
     res.status(403).json({ error: "You cannot edit this prize" });
     return;
   }
-  const [prize] = await db.update(streakPrizesTable).set({
+  const updates = {
     ...(typeof req.body?.name === "string" ? { name: req.body.name.trim() } : {}),
     ...(req.body?.description !== undefined ? { description: req.body.description || null } : {}),
     ...(req.body?.prizeType !== undefined ? { prizeType: req.body.prizeType } : {}),
@@ -233,7 +295,23 @@ router.patch("/streaks/prizes/:id", async (req, res): Promise<void> => {
     ...(req.body?.cycleLengthDays !== undefined ? { cycleLengthDays: Number(req.body.cycleLengthDays) } : {}),
     ...(req.body?.streakMode !== undefined ? { streakMode: req.body.streakMode } : {}),
     ...(req.body?.isActive !== undefined ? { isActive: Boolean(req.body.isActive) } : {}),
-  }).where(eq(streakPrizesTable.id, id)).returning();
+  };
+  const prize = await db.transaction(async (tx) => {
+    if (req.body?.isActive === true) {
+      await tx.update(streakPrizesTable)
+        .set({ isActive: false })
+        .where(and(
+          eq(streakPrizesTable.isActive, true),
+          isNull(streakPrizesTable.archivedAt),
+          sameBranchScope(existing.branchId),
+        ));
+    }
+    const [updated] = await tx.update(streakPrizesTable)
+      .set(updates)
+      .where(eq(streakPrizesTable.id, id))
+      .returning();
+    return updated;
+  });
   res.json(prize);
 });
 

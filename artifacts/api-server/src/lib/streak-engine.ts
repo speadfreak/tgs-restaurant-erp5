@@ -74,6 +74,11 @@ function normalizePhone(phone: string): string {
   return phone.replace(/^whatsapp:/i, "").replace(/[^\d+]/g, "");
 }
 
+function isHumanCustomerName(value: string | null | undefined): boolean {
+  const name = value?.trim() ?? "";
+  return Boolean(name && /\p{L}/u.test(name) && !/^customer(?:\s*#.*)?$/i.test(name));
+}
+
 function createStreakCode(): string {
   return `STK-${randomBytes(4).toString("base64url").replace(/[^A-Z0-9]/gi, "").toUpperCase().slice(0, 6).padEnd(6, "0")}`;
 }
@@ -134,10 +139,11 @@ async function createNewStreak(phone: string, name: string, branchId: number, co
   const targetOrders = prizeOrderTarget(prize);
   const cycleLength = prize?.cycleLengthDays ?? (Number(await getSetting("streak_default_cycle_length")) || DEFAULT_CYCLE_LENGTH);
   const start = todayUAE();
+  const customerName = name.trim() || "Customer";
   const [streak] = await db.insert(customerStreaksTable).values({
     customerPhone: phone,
-    customerName: name || "Customer",
-    streakCode: code ?? await ensureCustomerCode(phone, name),
+    customerName,
+    streakCode: code ?? await ensureCustomerCode(phone, customerName),
     branchId,
     cycleStartDate: start,
     cycleEndDate: addDays(start, cycleLength - 1),
@@ -303,6 +309,7 @@ export async function processDeliveryStreak(
   if ((await getSetting("streak_enabled")) === "false") return null;
   const phone = normalizePhone(customerPhone);
   if (!phone) return null;
+  const displayName = customerName.trim();
   const today = todayUAE();
   let streak = await getActiveStreak(phone);
 
@@ -311,8 +318,14 @@ export async function processDeliveryStreak(
     streak = await getActiveStreak(phone);
   }
   if (!streak) {
-    const code = await ensureCustomerCode(phone, customerName);
-    streak = await createNewStreak(phone, customerName, branchId, code);
+    const code = await ensureCustomerCode(phone, displayName);
+    streak = await createNewStreak(phone, displayName, branchId, code);
+  }
+  if (isHumanCustomerName(displayName) && !isHumanCustomerName(streak.customerName)) {
+    await db.update(customerStreaksTable)
+      .set({ customerName: displayName, updatedAt: new Date() })
+      .where(eq(customerStreaksTable.id, streak.id));
+    streak = { ...streak, customerName: displayName };
   }
 
   await db.insert(streakActiveDaysTable).values({

@@ -769,16 +769,25 @@ router.post("/delivery/orders/:id/complete", authenticate, requireRole(...DELIVE
   tryEmitTo(`order:${order.orderCode}`, "order:status_public", { status: outcome });
   if (outcome === "delivered") {
     try {
-      const customerPhone = order.customerPhoneDirect ?? (
+      const customer = order.customerId
+        ? (await db.select({
+          phone: customersTable.phone,
+          name: customersTable.name,
+        }).from(customersTable).where(eq(customersTable.id, order.customerId)))[0]
+        : null;
+      const customerPhone = order.customerPhoneDirect?.trim() || (
         order.customerId
-          ? (await db.select({ phone: customersTable.phone }).from(customersTable).where(eq(customersTable.id, order.customerId)))[0]?.phone
+          ? customer?.phone
           : null
       );
       if (customerPhone) {
+        const customerName = order.customerNameDirect?.trim()
+          || customer?.name?.trim()
+          || `Customer #${order.customerId ?? "guest"}`;
         streakInfo = await processDeliveryStreak(
           order.id,
           customerPhone,
-          order.customerNameDirect ?? `Customer #${order.customerId ?? "guest"}`,
+          customerName,
           order.branchId,
         );
       }

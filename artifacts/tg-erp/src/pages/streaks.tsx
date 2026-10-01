@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
-import { Trophy, Plus, RefreshCw, X, Users, Flame, Pencil } from "lucide-react";
+import { Trophy, Plus, RefreshCw, X, Users, Flame, Pencil, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/lib/auth";
 import { getApiBase } from "@/lib/api-base";
 
 const BASE = getApiBase();
@@ -69,6 +70,7 @@ function Badge({ children, color = "amber" }: { children: React.ReactNode; color
 
 export default function Streaks() {
   const { toast } = useToast();
+  const { user } = useAuth();
   const [active, setActive] = useState<Streak[]>([]);
   const [allStreaks, setAllStreaks] = useState<Streak[]>([]);
   const [winners, setWinners] = useState<Streak[]>([]);
@@ -78,6 +80,9 @@ export default function Streaks() {
   const [showForm, setShowForm] = useState(false);
   const [editingPrizeId, setEditingPrizeId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
+  const [showResetDialog, setShowResetDialog] = useState(false);
+  const [resetConfirmation, setResetConfirmation] = useState("");
+  const [resetting, setResetting] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -124,7 +129,10 @@ export default function Streaks() {
       );
       closeForm();
       await load();
-      toast({ title: isEditing ? "Challenge updated" : "Challenge created", description: "New deliveries will use the active catalogue settings." });
+      toast({
+        title: isEditing ? "Challenge updated" : "Challenge created",
+        description: "New challenges will use these settings. Existing challenges keep their original target and time window.",
+      });
     } catch (error) {
       toast({ title: "Could not save challenge", description: String(error), variant: "destructive" });
     }
@@ -162,6 +170,25 @@ export default function Streaks() {
     }
   };
 
+  const resetLoyaltySystem = async () => {
+    if (resetConfirmation !== "RESET") return;
+    setResetting(true);
+    try {
+      const result = await api("/api/streaks/reset", "POST", { confirmation: resetConfirmation });
+      setShowResetDialog(false);
+      setResetConfirmation("");
+      await load();
+      toast({
+        title: "Loyalty system reset",
+        description: `${result.deletedChallenges} challenge records and ${result.deletedOrderProgress} order-progress entries removed. Prize catalogue and ERP records were kept.`,
+      });
+    } catch (error) {
+      toast({ title: "Could not reset loyalty system", description: String(error), variant: "destructive" });
+    } finally {
+      setResetting(false);
+    }
+  };
+
   return (
     <div className="min-h-screen space-y-6 p-4 md:p-6" style={{ background: "hsl(0 0% 4%)" }}>
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -169,7 +196,19 @@ export default function Streaks() {
           <div className="flex items-center gap-2"><Flame className="h-5 w-5 text-orange-400" /><h1 className="cinema-title text-2xl text-amber-400">Order Challenge Loyalty</h1></div>
           <p className="mt-1 text-sm text-zinc-500">Track delivered orders inside each customer&apos;s configured time window.</p>
         </div>
-        <Button variant="outline" className="border-zinc-700" onClick={load}><RefreshCw className="mr-2 h-4 w-4" />Refresh</Button>
+        <div className="flex flex-wrap gap-2">
+          {user?.role === "super_admin" && (
+            <Button
+              data-testid="button-reset-loyalty"
+              variant="outline"
+              className="border-red-500/40 text-red-300 hover:bg-red-500/10 hover:text-red-200"
+              onClick={() => { setResetConfirmation(""); setShowResetDialog(true); }}
+            >
+              <RotateCcw className="mr-2 h-4 w-4" />Reset loyalty system
+            </Button>
+          )}
+          <Button variant="outline" className="border-zinc-700" onClick={load}><RefreshCw className="mr-2 h-4 w-4" />Refresh</Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -229,6 +268,9 @@ export default function Streaks() {
             </div>)}
             {prizes.length === 0 && <div className="p-5 text-sm text-zinc-500">No challenges configured. The default 6-order, 7-day challenge will still track progress.</div>}
           </div>
+          <p className="border-t border-zinc-800 px-4 py-3 text-xs text-zinc-500">
+            Each customer challenge keeps the target and time window it started with. Editing the catalogue affects new challenges; use Reset loyalty system to clear all challenge history and start everyone with the active settings.
+          </p>
         </section>
       </div>
 
@@ -251,6 +293,55 @@ export default function Streaks() {
           </table>
         </div>
       </section>
+
+      {showResetDialog && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/75 p-4">
+          <div
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="reset-loyalty-title"
+            aria-describedby="reset-loyalty-description"
+            className="w-full max-w-lg rounded-xl border border-red-500/30 bg-zinc-950 p-5 shadow-2xl shadow-black/50"
+          >
+            <h2 id="reset-loyalty-title" className="text-lg font-bold text-white">Reset the loyalty system?</h2>
+            <p id="reset-loyalty-description" className="mt-3 text-sm leading-6 text-zinc-300">
+              This permanently deletes every active and historical challenge, recorded delivery progress, and stored customer loyalty code. It keeps the prize catalogue, customer profiles, orders, and all other ERP records.
+            </p>
+            <Label htmlFor="reset-loyalty-confirmation" className="mt-4 block text-xs text-zinc-400">
+              Type RESET to confirm
+            </Label>
+            <Input
+              id="reset-loyalty-confirmation"
+              data-testid="input-reset-loyalty-confirmation"
+              autoComplete="off"
+              value={resetConfirmation}
+              onChange={event => setResetConfirmation(event.target.value)}
+              className="mt-2 border-zinc-700 bg-zinc-900"
+              placeholder="RESET"
+            />
+            <div className="mt-5 flex justify-end gap-2">
+              <Button
+                data-testid="button-cancel-reset-loyalty"
+                type="button"
+                variant="outline"
+                disabled={resetting}
+                onClick={() => { setShowResetDialog(false); setResetConfirmation(""); }}
+              >
+                Cancel
+              </Button>
+              <Button
+                data-testid="button-confirm-reset-loyalty"
+                type="button"
+                variant="destructive"
+                disabled={resetting || resetConfirmation !== "RESET"}
+                onClick={resetLoyaltySystem}
+              >
+                {resetting ? "Resetting..." : "Reset all loyalty data"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
