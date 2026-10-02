@@ -1,11 +1,12 @@
 import { Router, type Request } from "express";
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, or } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, or } from "drizzle-orm";
 import {
   db,
   customersTable,
   customerStreaksTable,
   ordersTable,
   orderStatusHistoryTable,
+  settingsTable,
   streakActiveDaysTable,
   streakPrizesTable,
 } from "@workspace/db";
@@ -38,12 +39,19 @@ function sameBranchScope(branchId: number | null) {
 }
 
 let recentNameBackfill: Promise<number> | null = null;
+let loyaltyResetInProgress: Promise<void> | null = null;
 
 async function backfillRecentNamedDeliveries(branchId?: number): Promise<number> {
+  while (loyaltyResetInProgress) await loyaltyResetInProgress;
   if (recentNameBackfill) return recentNameBackfill;
 
   recentNameBackfill = (async () => {
     const cutoff = new Date(Date.now() - 90 * 86_400_000);
+    const [resetMarker] = await db.select({ value: settingsTable.value })
+      .from(settingsTable)
+      .where(eq(settingsTable.key, "streak_last_reset_at"));
+    const resetDate = resetMarker ? new Date(resetMarker.value) : null;
+    const validResetDate = resetDate && Number.isFinite(resetDate.getTime()) ? resetDate : null;
     const deliveredOrders = await db.select({
       orderId: ordersTable.id,
       branchId: ordersTable.branchId,
@@ -63,6 +71,7 @@ async function backfillRecentNamedDeliveries(branchId?: number): Promise<number>
       .where(and(
         eq(ordersTable.status, "delivered"),
         gte(orderStatusHistoryTable.changedAt, cutoff),
+        validResetDate ? gt(orderStatusHistoryTable.changedAt, validResetDate) : undefined,
         isNull(streakActiveDaysTable.id),
         branchId === undefined ? undefined : eq(ordersTable.branchId, branchId),
       ))
@@ -194,30 +203,48 @@ router.post("/streaks/reset", async (req, res): Promise<void> => {
     return;
   }
 
-  const summary = await db.transaction(async (tx) => {
-    const progressRows = await tx.delete(streakActiveDaysTable)
-      .returning({ id: streakActiveDaysTable.id });
-    const challengeRows = await tx.delete(customerStreaksTable)
-      .returning({ id: customerStreaksTable.id });
-    const customerRows = await tx.update(customersTable)
-      .set({ streakCode: null, currentStreakId: null })
-      .where(or(
-        isNotNull(customersTable.streakCode),
-        isNotNull(customersTable.currentStreakId),
-      ))
-      .returning({ id: customersTable.id });
+  while (loyaltyResetInProgress) await loyaltyResetInProgress;
+  let releaseResetLock = () => {};
+  loyaltyResetInProgress = new Promise<void>(resolve => { releaseResetLock = resolve; });
+  try {
+    if (recentNameBackfill) await recentNameBackfill.catch(() => 0);
+    const resetAt = new Date();
+    const summary = await db.transaction(async (tx) => {
+      const progressRows = await tx.delete(streakActiveDaysTable)
+        .returning({ id: streakActiveDaysTable.id });
+      const challengeRows = await tx.delete(customerStreaksTable)
+        .returning({ id: customerStreaksTable.id });
+      const customerRows = await tx.update(customersTable)
+        .set({ streakCode: null, currentStreakId: null })
+        .where(or(
+          isNotNull(customersTable.streakCode),
+          isNotNull(customersTable.currentStreakId),
+        ))
+        .returning({ id: customersTable.id });
+      await tx.insert(settingsTable).values({
+        key: "streak_last_reset_at",
+        value: resetAt.toISOString(),
+        isSensitive: true,
+      }).onConflictDoUpdate({
+        target: settingsTable.key,
+        set: { value: resetAt.toISOString(), isSensitive: true },
+      });
 
-    return {
-      deletedOrderProgress: progressRows.length,
-      deletedChallenges: challengeRows.length,
-      clearedCustomerLoyaltyRecords: customerRows.length,
-    };
-  });
+      return {
+        deletedOrderProgress: progressRows.length,
+        deletedChallenges: challengeRows.length,
+        clearedCustomerLoyaltyRecords: customerRows.length,
+      };
+    });
 
-  res.json({
-    ...summary,
-    message: "Loyalty challenges and progress have been reset. The prize catalogue and ERP records were kept.",
-  });
+    res.json({
+      ...summary,
+      message: "Loyalty challenges and progress have been reset. The prize catalogue and ERP records were kept.",
+    });
+  } finally {
+    loyaltyResetInProgress = null;
+    releaseResetLock();
+  }
 });
 
 router.get("/streaks/dashboard", async (req, res): Promise<void> => {

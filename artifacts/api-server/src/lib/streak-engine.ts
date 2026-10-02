@@ -239,7 +239,12 @@ async function getStreakProgress(streak: CustomerStreak): Promise<StreakProgress
 
   // Rows are now one per delivered order. The fallback keeps older day-based
   // records visible until their first order is added after this upgrade.
-  const orderCount = rows.length || streak.orderCount || streak.activeDays || streak.activeDayDates.length;
+  const orderCount = Math.max(
+    rows.length,
+    streak.orderCount ?? 0,
+    streak.activeDays ?? 0,
+    streak.activeDayDates.length,
+  );
   const activeDates = Array.from(new Set(rows.map(row => row.activeDate).concat(streak.activeDayDates ?? []))).sort();
   return { orderCount, activeDates };
 }
@@ -258,6 +263,17 @@ function displayPrizeName(prize: StreakPrize | null): string {
   return prize?.name || "your foodie reward";
 }
 
+function formatChallengeEndDate(value: string): string {
+  const [year, month, day] = value.split("-").map(Number);
+  if (!year || !month || !day) return value;
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(year, month - 1, day, 12)));
+}
+
 function generateStreakMessage(params: {
   ordersCompleted: number;
   minOrders: number;
@@ -267,21 +283,29 @@ function generateStreakMessage(params: {
   prize: StreakPrize | null;
   streakCode: string;
   cycleEnded: boolean;
+  cycleEndDate: string;
 }): StreakMessage {
-  const { ordersCompleted, minOrders, daysLeft, ordersRemaining, isWinner, prize, streakCode, cycleEnded } = params;
+  const { ordersCompleted, minOrders, daysLeft, ordersRemaining, isWinner, prize, streakCode, cycleEnded, cycleEndDate } = params;
   const prizeName = displayPrizeName(prize);
+  const endDate = formatChallengeEndDate(cycleEndDate);
+  const amExpiry = cycleEnded
+    ? `🗓️ የፈተናው የማብቂያ ቀን: ${endDate}`
+    : `🗓️ ፈተናው የሚያበቃበት ቀን: ${endDate}`;
+  const enExpiry = cycleEnded
+    ? `🗓️ Challenge ended on: ${endDate}`
+    : `🗓️ Challenge expires: ${endDate}`;
 
   if (isWinner && prize) {
     return {
-      en: `🎉 FOODIE CHALLENGE COMPLETE!\nYou completed ${ordersCompleted}/${minOrders} orders and won ${prizeName}! Please claim your prize on your next visit.\n\n🎫 Challenge code: ${streakCode}`,
-      am: `🎉 የትዕዛዝ ፈተናው ተጠናቀቀ!\nበዚህ ዙር ${ordersCompleted}/${minOrders} የትዕዛዝ ጊዜ አጠናቀው ${prizeName} አሸንፈዋል! ሽልማትዎን ለመውሰድ በሚቀጥለው ጉብኝትዎ ይምጡ።\n\n🎫 የፈተና ኮድ: ${streakCode}`,
+      en: `🎉 FOODIE CHALLENGE COMPLETE!\nYou completed ${ordersCompleted}/${minOrders} orders and won ${prizeName}! Please claim your prize on your next visit.\n\n🎫 Challenge code: ${streakCode}\n${enExpiry}`,
+      am: `🎉 የትዕዛዝ ፈተናው ተጠናቀቀ!\nበዚህ ዙር ${ordersCompleted}/${minOrders} የትዕዛዝ ጊዜ አጠናቀው ${prizeName} አሸንፈዋል! ሽልማትዎን ለመውሰድ በሚቀጥለው ጉብኝትዎ ይምጡ።\n\n🎫 የፈተና ኮድ: ${streakCode}\n${amExpiry}`,
     };
   }
 
   if (cycleEnded) {
     return {
-      en: `This round ended at ${ordersCompleted}/${minOrders} orders. Your next foodie challenge starts with your next delicious order — see you soon!\n\n🎫 Challenge code: ${streakCode}`,
-      am: `ይህ ዙር ${ordersCompleted}/${minOrders} የትዕዛዝ ጊዜ ላይ አብቅቷል። በሚቀጥለው ትዕዛዝዎ አዲስ የትዕዛዝ ፈተና ይጀምራል — በቅርቡ እንገናኝ!\n\n🎫 የፈተና ኮድ: ${streakCode}`,
+      en: `This round ended at ${ordersCompleted}/${minOrders} orders. Your next foodie challenge starts with your next delicious order — see you soon!\n\n🎫 Challenge code: ${streakCode}\n${enExpiry}`,
+      am: `ይህ ዙር ${ordersCompleted}/${minOrders} የትዕዛዝ ጊዜ ላይ አብቅቷል። በሚቀጥለው ትዕዛዝዎ አዲስ የትዕዛዝ ፈተና ይጀምራል — በቅርቡ እንገናኝ!\n\n🎫 የፈተና ኮድ: ${streakCode}\n${amExpiry}`,
     };
   }
 
@@ -289,14 +313,14 @@ function generateStreakMessage(params: {
     const orderWord = ordersRemaining === 1 ? "order" : "orders";
     const orderWordAm = ordersRemaining === 1 ? "የትዕዛዝ ጊዜ" : "የትዕዛዝ ጊዜዎች";
     return {
-      en: `Just ${ordersRemaining} more ${orderWord} of delicious meals to score ${prizeName}! You've completed ${ordersCompleted}/${minOrders} orders this cycle. See you next order!${daysLeft === 0 ? " Today is the final day." : ""}\n\n🎫 Challenge code: ${streakCode}`,
-      am: `${ordersRemaining} ${orderWordAm} ብቻ ${prizeName} ለማግኘት ቀርተዋል! በዚህ ዙር ${ordersCompleted}/${minOrders} አጠናቀዋል። በቀጣይ ትዕዛዝ እንገናኝ!${daysLeft === 0 ? " ዛሬ የመጨረሻ ቀን ነው።" : ""}\n\n🎫 የፈተና ኮድ: ${streakCode}`,
+      en: `Just ${ordersRemaining} more ${orderWord} of delicious meals to score ${prizeName}! You've completed ${ordersCompleted}/${minOrders} orders this cycle. See you next order!${daysLeft === 0 ? " Today is the final day." : ""}\n\n🎫 Challenge code: ${streakCode}\n${enExpiry}`,
+      am: `${ordersRemaining} ${orderWordAm} ብቻ ${prizeName} ለማግኘት ቀርተዋል! በዚህ ዙር ${ordersCompleted}/${minOrders} አጠናቀዋል። በቀጣይ ትዕዛዝ እንገናኝ!${daysLeft === 0 ? " ዛሬ የመጨረሻ ቀን ነው።" : ""}\n\n🎫 የፈተና ኮድ: ${streakCode}\n${amExpiry}`,
     };
   }
 
   return {
-    en: `You're on a delicious roll! You've completed ${ordersCompleted}/${minOrders} orders this cycle. Keep the good food coming!\n\n🎫 Challenge code: ${streakCode}`,
-    am: `በጣፋጭ ጉዞ ላይ ነዎት! በዚህ ዙር ${ordersCompleted}/${minOrders} አጠናቀዋል። ጣፋጭ ትዕዛዝዎን ይቀጥሉ!\n\n🎫 የፈተና ኮድ: ${streakCode}`,
+    en: `You're on a delicious roll! You've completed ${ordersCompleted}/${minOrders} orders this cycle. Keep the good food coming!\n\n🎫 Challenge code: ${streakCode}\n${enExpiry}`,
+    am: `በጣፋጭ ጉዞ ላይ ነዎት! በዚህ ዙር ${ordersCompleted}/${minOrders} አጠናቀዋል። ጣፋጭ ትዕዛዝዎን ይቀጥሉ!\n\n🎫 የፈተና ኮድ: ${streakCode}\n${amExpiry}`,
   };
 }
 
@@ -312,6 +336,7 @@ async function notifyWinner(streak: CustomerStreak, prize: StreakPrize | null, p
     prize,
     streakCode: streak.streakCode,
     cycleEnded: true,
+    cycleEndDate: streak.cycleEndDate,
   });
   const result = await sendWhatsAppMessage(streak.customerPhone, `${message.am}\n\n${message.en}`);
   if (result.ok) {
@@ -348,6 +373,7 @@ async function finalizeExpiredStreak(streak: CustomerStreak, sendNotifications =
       prize,
       streakCode: streak.streakCode,
       cycleEnded: true,
+      cycleEndDate: streak.cycleEndDate,
     });
     await sendWhatsAppMessage(streak.customerPhone, `${resetMessage.am}\n\n${resetMessage.en}`);
   }
@@ -387,13 +413,21 @@ export async function processDeliveryStreak(
     streak = { ...streak, customerName: displayName };
   }
 
-  await db.insert(streakActiveDaysTable).values({
+  const [insertedOrder] = await db.insert(streakActiveDaysTable).values({
     streakId: streak.id,
     activeDate: today,
     orderId,
-  }).onConflictDoNothing();
+  }).onConflictDoNothing().returning({ id: streakActiveDaysTable.id });
 
   const progress = await getStreakProgress(streak);
+  if (insertedOrder) {
+    const previousCount = Math.max(
+      streak.orderCount ?? 0,
+      streak.activeDays ?? 0,
+      streak.activeDayDates.length,
+    );
+    progress.orderCount = Math.max(progress.orderCount, previousCount + 1);
+  }
   const prize = await getPrizeForStreak(streak);
   const cycleLength = daysBetween(streak.cycleStartDate, streak.cycleEndDate) + 1;
   const minOrders = streakOrderTarget(streak, prize);
@@ -444,6 +478,7 @@ export async function processDeliveryStreak(
       prize,
       streakCode: streak.streakCode,
       cycleEnded,
+      cycleEndDate: streak.cycleEndDate,
     }),
   };
 }
@@ -498,6 +533,7 @@ export async function getStreakSnapshot(phone: string): Promise<StreakSnapshot |
       prize,
       streakCode: streak.streakCode,
       cycleEnded: streak.status !== "active",
+      cycleEndDate: streak.cycleEndDate,
     }),
     customerName: streak.customerName,
     customerPhone: displayCustomerStreakIdentity(streak.customerPhone, streak.customerName),

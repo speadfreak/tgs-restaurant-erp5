@@ -187,6 +187,15 @@ function buildStreakMessage(order: DeliveryOrder): string {
   const target = streak.minOrders ?? streak.minDays;
   const remaining = streak.ordersRemaining ?? streak.daysNeeded;
   const progress = `${completed}/${target}`;
+  const [year, month, day] = streak.cycleEndDate.split("-").map(Number);
+  const endDate = year && month && day
+    ? new Intl.DateTimeFormat("en-GB", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      timeZone: "UTC",
+    }).format(new Date(Date.UTC(year, month - 1, day, 12)))
+    : streak.cycleEndDate;
   const englishStatus = streak.isWinner
     ? `You completed ${progress} orders and scored ${prizeName}! Please claim your prize on your next visit.`
     : remaining > 0
@@ -201,9 +210,11 @@ function buildStreakMessage(order: DeliveryOrder): string {
     "📊 የትዕዛዝ ፈተና፦",
     amharicStatus,
     `🎫 Challenge code: ${streak.streakCode}`,
+    `🗓️ የፈተናው የመጨረሻ ቀን: ${endDate}`,
     "📊 FOODIE CHALLENGE:",
     englishStatus,
     `🎫 Challenge code: ${streak.streakCode}`,
+    `🗓️ Challenge end date: ${endDate}`,
   ].filter(Boolean).join("\n");
 }
 
