@@ -54,6 +54,8 @@ export async function ensureStreakSchema(): Promise<void> {
       branch_id integer REFERENCES branches(id),
       cycle_start_date date NOT NULL,
       cycle_end_date date NOT NULL,
+      cycle_start_at timestamptz,
+      cycle_end_at timestamptz,
       active_days integer NOT NULL DEFAULT 0,
        order_count integer NOT NULL DEFAULT 0,
        target_orders integer,
@@ -71,7 +73,9 @@ export async function ensureStreakSchema(): Promise<void> {
   await db.execute(sql`
     ALTER TABLE customer_streaks
       ADD COLUMN IF NOT EXISTS order_count integer NOT NULL DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS target_orders integer
+      ADD COLUMN IF NOT EXISTS target_orders integer,
+      ADD COLUMN IF NOT EXISTS cycle_start_at timestamptz,
+      ADD COLUMN IF NOT EXISTS cycle_end_at timestamptz
   `);
 
   await db.execute(sql`
