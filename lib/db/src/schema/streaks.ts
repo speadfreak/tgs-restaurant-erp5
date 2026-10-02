@@ -28,6 +28,8 @@ export const customerStreaksTable = pgTable("customer_streaks", {
   branchId: integer("branch_id").references(() => branchesTable.id),
   cycleStartDate: date("cycle_start_date", { mode: "string" }).notNull(),
   cycleEndDate: date("cycle_end_date", { mode: "string" }).notNull(),
+  cycleStartAt: timestamp("cycle_start_at", { withTimezone: true }),
+  cycleEndAt: timestamp("cycle_end_at", { withTimezone: true }),
   activeDays: integer("active_days").notNull().default(0),
   orderCount: integer("order_count").notNull().default(0),
   targetOrders: integer("target_orders"),

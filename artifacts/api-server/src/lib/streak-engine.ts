@@ -1,5 +1,5 @@
 import { randomBytes } from "crypto";
-import { and, asc, desc, eq, isNull, lt, or } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, lte, or } from "drizzle-orm";
 import {
   db,
   customersTable,
@@ -13,6 +13,7 @@ import { getSetting } from "./settings";
 import { sendWhatsAppMessage } from "./twilio";
 
 const UAE_TIMEZONE = "Asia/Dubai";
+const DAY_MS = 86_400_000;
 const DEFAULT_CYCLE_LENGTH = 7;
 const DEFAULT_MIN_ORDERS = 6;
 
@@ -35,6 +36,8 @@ export type StreakResult = {
   status: string;
   cycleStartDate: string;
   cycleEndDate: string;
+  cycleStartAt: string;
+  cycleEndAt: string;
 };
 
 export type StreakSnapshot = Omit<StreakResult, "message"> & {
@@ -48,10 +51,6 @@ type StreakProgress = {
   activeDates: string[];
 };
 
-function todayUAE(): string {
-  return dateInUAE(new Date());
-}
-
 function dateInUAE(value: Date): string {
   return value.toLocaleDateString("en-CA", { timeZone: UAE_TIMEZONE });
 }
@@ -64,14 +63,50 @@ function dayNumber(value: string): number {
   ) / 86_400_000;
 }
 
-function addDays(value: string, days: number): string {
-  const date = new Date(`${value}T00:00:00Z`);
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
-}
-
 function daysBetween(from: string, to: string): number {
   return Math.max(0, dayNumber(to) - dayNumber(from));
+}
+
+function uaeMidnight(value: string): Date {
+  return new Date(`${value}T00:00:00+04:00`);
+}
+
+function uaeMidnightAfter(value: string): Date {
+  const utcDate = new Date(`${value}T00:00:00Z`);
+  utcDate.setUTCDate(utcDate.getUTCDate() + 1);
+  return uaeMidnight(utcDate.toISOString().slice(0, 10));
+}
+
+export function getStreakCycleTimes(streak: CustomerStreak): {
+  cycleStartAt: Date;
+  cycleEndAt: Date;
+  cycleLengthDays: number;
+} {
+  if (streak.cycleStartAt && streak.cycleEndAt) {
+    const cycleLengthDays = Math.max(
+      1,
+      Math.round((streak.cycleEndAt.getTime() - streak.cycleStartAt.getTime()) / DAY_MS),
+    );
+    return {
+      cycleStartAt: streak.cycleStartAt,
+      cycleEndAt: streak.cycleEndAt,
+      cycleLengthDays,
+    };
+  }
+
+  // Existing challenges predate saved timestamps. Use their creation instant
+  // when it falls on the recorded first day, otherwise preserve the old UAE
+  // calendar-day boundary as the safest available legacy fallback.
+  const createdAt = new Date(streak.createdAt);
+  const cycleStartAt = dateInUAE(createdAt) === streak.cycleStartDate
+    ? createdAt
+    : uaeMidnight(streak.cycleStartDate);
+  const cycleLengthDays = Math.max(1, daysBetween(streak.cycleStartDate, streak.cycleEndDate) + 1);
+  return {
+    cycleStartAt,
+    cycleEndAt: uaeMidnightAfter(streak.cycleEndDate),
+    cycleLengthDays,
+  };
 }
 
 function normalizePhone(phone: string): string {
@@ -186,20 +221,23 @@ async function createNewStreak(
   name: string,
   branchId: number,
   code?: string,
-  startDate = todayUAE(),
+  startAt = new Date(),
 ): Promise<CustomerStreak> {
   const prize = await getActivePrize(branchId);
   const targetOrders = prizeOrderTarget(prize);
   const cycleLength = prize?.cycleLengthDays ?? (Number(await getSetting("streak_default_cycle_length")) || DEFAULT_CYCLE_LENGTH);
-  const start = startDate;
+  const cycleStartAt = startAt;
+  const cycleEndAt = new Date(cycleStartAt.getTime() + cycleLength * DAY_MS);
   const customerName = name.trim() || "Customer";
   const [streak] = await db.insert(customerStreaksTable).values({
     customerPhone: phone,
     customerName,
     streakCode: code ?? await ensureCustomerCode(phone, customerName),
     branchId,
-    cycleStartDate: start,
-    cycleEndDate: addDays(start, cycleLength - 1),
+    cycleStartDate: dateInUAE(cycleStartAt),
+    cycleEndDate: dateInUAE(cycleEndAt),
+    cycleStartAt,
+    cycleEndAt,
     activeDays: 0,
     orderCount: 0,
     targetOrders,
@@ -263,15 +301,17 @@ function displayPrizeName(prize: StreakPrize | null): string {
   return prize?.name || "your foodie reward";
 }
 
-function formatChallengeEndDate(value: string): string {
-  const [year, month, day] = value.split("-").map(Number);
-  if (!year || !month || !day) return value;
+function formatChallengeDateTime(value: Date): string {
   return new Intl.DateTimeFormat("en-GB", {
     day: "numeric",
     month: "short",
     year: "numeric",
-    timeZone: "UTC",
-  }).format(new Date(Date.UTC(year, month - 1, day, 12)));
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    timeZone: UAE_TIMEZONE,
+    timeZoneName: "short",
+  }).format(value);
 }
 
 function generateStreakMessage(params: {
@@ -283,29 +323,27 @@ function generateStreakMessage(params: {
   prize: StreakPrize | null;
   streakCode: string;
   cycleEnded: boolean;
-  cycleEndDate: string;
+  cycleStartAt: Date;
+  cycleEndAt: Date;
 }): StreakMessage {
-  const { ordersCompleted, minOrders, daysLeft, ordersRemaining, isWinner, prize, streakCode, cycleEnded, cycleEndDate } = params;
+  const { ordersCompleted, minOrders, daysLeft, ordersRemaining, isWinner, prize, streakCode, cycleEnded, cycleStartAt, cycleEndAt } = params;
   const prizeName = displayPrizeName(prize);
-  const endDate = formatChallengeEndDate(cycleEndDate);
-  const amExpiry = cycleEnded
-    ? `🗓️ የፈተናው የማብቂያ ቀን: ${endDate}`
-    : `🗓️ ፈተናው የሚያበቃበት ቀን: ${endDate}`;
-  const enExpiry = cycleEnded
-    ? `🗓️ Challenge ended on: ${endDate}`
-    : `🗓️ Challenge expires: ${endDate}`;
+  const startTime = formatChallengeDateTime(cycleStartAt);
+  const endTime = formatChallengeDateTime(cycleEndAt);
+  const amWindow = `🕘 የፈተናው ጊዜ: ${startTime} – ${endTime} (የዱባይ ሰዓት)`;
+  const enWindow = `🕘 Challenge window: ${startTime} – ${endTime} (Dubai time)`;
 
   if (isWinner && prize) {
     return {
-      en: `🎉 FOODIE CHALLENGE COMPLETE!\nYou completed ${ordersCompleted}/${minOrders} orders and won ${prizeName}! Please claim your prize on your next visit.\n\n🎫 Challenge code: ${streakCode}\n${enExpiry}`,
-      am: `🎉 የትዕዛዝ ፈተናው ተጠናቀቀ!\nበዚህ ዙር ${ordersCompleted}/${minOrders} የትዕዛዝ ጊዜ አጠናቀው ${prizeName} አሸንፈዋል! ሽልማትዎን ለመውሰድ በሚቀጥለው ጉብኝትዎ ይምጡ።\n\n🎫 የፈተና ኮድ: ${streakCode}\n${amExpiry}`,
+      en: `🎉 FOODIE CHALLENGE COMPLETE!\nYou completed ${ordersCompleted}/${minOrders} orders and won ${prizeName}! Please claim your prize on your next visit.\n\n🎫 Challenge code: ${streakCode}\n${enWindow}`,
+      am: `🎉 የትዕዛዝ ፈተናው ተጠናቀቀ!\nበዚህ ዙር ${ordersCompleted}/${minOrders} የትዕዛዝ ጊዜ አጠናቀው ${prizeName} አሸንፈዋል! ሽልማትዎን ለመውሰድ በሚቀጥለው ጉብኝትዎ ይምጡ።\n\n🎫 የፈተና ኮድ: ${streakCode}\n${amWindow}`,
     };
   }
 
   if (cycleEnded) {
     return {
-      en: `This round ended at ${ordersCompleted}/${minOrders} orders. Your next foodie challenge starts with your next delicious order — see you soon!\n\n🎫 Challenge code: ${streakCode}\n${enExpiry}`,
-      am: `ይህ ዙር ${ordersCompleted}/${minOrders} የትዕዛዝ ጊዜ ላይ አብቅቷል። በሚቀጥለው ትዕዛዝዎ አዲስ የትዕዛዝ ፈተና ይጀምራል — በቅርቡ እንገናኝ!\n\n🎫 የፈተና ኮድ: ${streakCode}\n${amExpiry}`,
+      en: `This round ended at ${ordersCompleted}/${minOrders} orders. Your next foodie challenge starts with your next delicious order — see you soon!\n\n🎫 Challenge code: ${streakCode}\n${enWindow}`,
+      am: `ይህ ዙር ${ordersCompleted}/${minOrders} የትዕዛዝ ጊዜ ላይ አብቅቷል። በሚቀጥለው ትዕዛዝዎ አዲስ የትዕዛዝ ፈተና ይጀምራል — በቅርቡ እንገናኝ!\n\n🎫 የፈተና ኮድ: ${streakCode}\n${amWindow}`,
     };
   }
 
@@ -313,20 +351,21 @@ function generateStreakMessage(params: {
     const orderWord = ordersRemaining === 1 ? "order" : "orders";
     const orderWordAm = ordersRemaining === 1 ? "የትዕዛዝ ጊዜ" : "የትዕዛዝ ጊዜዎች";
     return {
-      en: `Just ${ordersRemaining} more ${orderWord} of delicious meals to score ${prizeName}! You've completed ${ordersCompleted}/${minOrders} orders this cycle. See you next order!${daysLeft === 0 ? " Today is the final day." : ""}\n\n🎫 Challenge code: ${streakCode}\n${enExpiry}`,
-      am: `${ordersRemaining} ${orderWordAm} ብቻ ${prizeName} ለማግኘት ቀርተዋል! በዚህ ዙር ${ordersCompleted}/${minOrders} አጠናቀዋል። በቀጣይ ትዕዛዝ እንገናኝ!${daysLeft === 0 ? " ዛሬ የመጨረሻ ቀን ነው።" : ""}\n\n🎫 የፈተና ኮድ: ${streakCode}\n${amExpiry}`,
+      en: `Just ${ordersRemaining} more ${orderWord} of delicious meals to score ${prizeName}! You've completed ${ordersCompleted}/${minOrders} orders this cycle. See you next order!${daysLeft === 0 ? " Today is the final day." : ""}\n\n🎫 Challenge code: ${streakCode}\n${enWindow}`,
+      am: `${ordersRemaining} ${orderWordAm} ብቻ ${prizeName} ለማግኘት ቀርተዋል! በዚህ ዙር ${ordersCompleted}/${minOrders} አጠናቀዋል። በቀጣይ ትዕዛዝ እንገናኝ!${daysLeft === 0 ? " ዛሬ የመጨረሻ ቀን ነው።" : ""}\n\n🎫 የፈተና ኮድ: ${streakCode}\n${amWindow}`,
     };
   }
 
   return {
-    en: `You're on a delicious roll! You've completed ${ordersCompleted}/${minOrders} orders this cycle. Keep the good food coming!\n\n🎫 Challenge code: ${streakCode}\n${enExpiry}`,
-    am: `በጣፋጭ ጉዞ ላይ ነዎት! በዚህ ዙር ${ordersCompleted}/${minOrders} አጠናቀዋል። ጣፋጭ ትዕዛዝዎን ይቀጥሉ!\n\n🎫 የፈተና ኮድ: ${streakCode}\n${amExpiry}`,
+    en: `You're on a delicious roll! You've completed ${ordersCompleted}/${minOrders} orders this cycle. Keep the good food coming!\n\n🎫 Challenge code: ${streakCode}\n${enWindow}`,
+    am: `በጣፋጭ ጉዞ ላይ ነዎት! በዚህ ዙር ${ordersCompleted}/${minOrders} አጠናቀዋል። ጣፋጭ ትዕዛዝዎን ይቀጥሉ!\n\n🎫 የፈተና ኮድ: ${streakCode}\n${amWindow}`,
   };
 }
 
 async function notifyWinner(streak: CustomerStreak, prize: StreakPrize | null, progress: StreakProgress): Promise<void> {
   if (!isPhoneIdentity(streak.customerPhone) || (await getSetting("streak_auto_notification")) === "false" || !prize) return;
   const target = streakOrderTarget(streak, prize);
+  const cycleTimes = getStreakCycleTimes(streak);
   const message = generateStreakMessage({
     ordersCompleted: progress.orderCount,
     minOrders: target,
@@ -336,7 +375,8 @@ async function notifyWinner(streak: CustomerStreak, prize: StreakPrize | null, p
     prize,
     streakCode: streak.streakCode,
     cycleEnded: true,
-    cycleEndDate: streak.cycleEndDate,
+    cycleStartAt: cycleTimes.cycleStartAt,
+    cycleEndAt: cycleTimes.cycleEndAt,
   });
   const result = await sendWhatsAppMessage(streak.customerPhone, `${message.am}\n\n${message.en}`);
   if (result.ok) {
@@ -348,6 +388,7 @@ async function finalizeExpiredStreak(streak: CustomerStreak, sendNotifications =
   const prize = await getPrizeForStreak(streak);
   const progress = await getStreakProgress(streak);
   const target = streakOrderTarget(streak, prize);
+  const cycleTimes = getStreakCycleTimes(streak);
   await syncStreakProgress(streak, progress);
 
   if (progress.orderCount >= target) {
@@ -373,7 +414,8 @@ async function finalizeExpiredStreak(streak: CustomerStreak, sendNotifications =
       prize,
       streakCode: streak.streakCode,
       cycleEnded: true,
-      cycleEndDate: streak.cycleEndDate,
+      cycleStartAt: cycleTimes.cycleStartAt,
+      cycleEndAt: cycleTimes.cycleEndAt,
     });
     await sendWhatsAppMessage(streak.customerPhone, `${resetMessage.am}\n\n${resetMessage.en}`);
   }
@@ -394,17 +436,17 @@ export async function processDeliveryStreak(
   const displayName = phone.startsWith("name:")
     ? isHumanCustomerName(customerName) ? customerName.trim() : phone.slice("name:".length)
     : customerName.trim() || "Customer";
-  const today = options.deliveredAt ? dateInUAE(options.deliveredAt) : todayUAE();
+  const deliveredAt = options.deliveredAt ?? new Date();
   let streak = await getActiveStreak(phone);
 
-  if (streak && dayNumber(today) > dayNumber(streak.cycleEndDate)) {
+  if (streak && deliveredAt.getTime() >= getStreakCycleTimes(streak).cycleEndAt.getTime()) {
     await finalizeExpiredStreak(streak, !options.suppressNotifications);
     streak = await getActiveStreak(phone);
   }
-  if (streak && dayNumber(today) < dayNumber(streak.cycleStartDate)) return null;
+  if (streak && deliveredAt.getTime() < getStreakCycleTimes(streak).cycleStartAt.getTime()) return null;
   if (!streak) {
     const code = await ensureCustomerCode(phone, displayName);
-    streak = await createNewStreak(phone, displayName, branchId, code, today);
+    streak = await createNewStreak(phone, displayName, branchId, code, deliveredAt);
   }
   if (isHumanCustomerName(displayName) && !isHumanCustomerName(streak.customerName)) {
     await db.update(customerStreaksTable)
@@ -415,7 +457,7 @@ export async function processDeliveryStreak(
 
   const [insertedOrder] = await db.insert(streakActiveDaysTable).values({
     streakId: streak.id,
-    activeDate: today,
+    activeDate: dateInUAE(deliveredAt),
     orderId,
   }).onConflictDoNothing().returning({ id: streakActiveDaysTable.id });
 
@@ -429,11 +471,12 @@ export async function processDeliveryStreak(
     progress.orderCount = Math.max(progress.orderCount, previousCount + 1);
   }
   const prize = await getPrizeForStreak(streak);
-  const cycleLength = daysBetween(streak.cycleStartDate, streak.cycleEndDate) + 1;
+  const cycleTimes = getStreakCycleTimes(streak);
+  const cycleLength = cycleTimes.cycleLengthDays;
   const minOrders = streakOrderTarget(streak, prize);
-  const cycleEnded = dayNumber(today) > dayNumber(streak.cycleEndDate);
+  const cycleEnded = deliveredAt.getTime() >= cycleTimes.cycleEndAt.getTime();
   const isWinner = !cycleEnded && progress.orderCount >= minOrders;
-  const daysLeft = daysBetween(today, streak.cycleEndDate);
+  const daysLeft = Math.max(0, Math.ceil((cycleTimes.cycleEndAt.getTime() - deliveredAt.getTime()) / DAY_MS));
   const ordersRemaining = Math.max(0, minOrders - progress.orderCount);
 
   if (isWinner) {
@@ -469,6 +512,8 @@ export async function processDeliveryStreak(
     status: isWinner ? "won" : "active",
     cycleStartDate: streak.cycleStartDate,
     cycleEndDate: streak.cycleEndDate,
+    cycleStartAt: cycleTimes.cycleStartAt.toISOString(),
+    cycleEndAt: cycleTimes.cycleEndAt.toISOString(),
     message: generateStreakMessage({
       ordersCompleted: progress.orderCount,
       minOrders,
@@ -478,7 +523,8 @@ export async function processDeliveryStreak(
       prize,
       streakCode: streak.streakCode,
       cycleEnded,
-      cycleEndDate: streak.cycleEndDate,
+      cycleStartAt: cycleTimes.cycleStartAt,
+      cycleEndAt: cycleTimes.cycleEndAt,
     }),
   };
 }
@@ -493,7 +539,7 @@ export async function getStreakSnapshot(phone: string): Promise<StreakSnapshot |
   let streak = rows.find(row => row.status === "active") ?? rows[0];
   if (!streak) return null;
 
-  if (streak.status === "active" && dayNumber(todayUAE()) > dayNumber(streak.cycleEndDate)) {
+  if (streak.status === "active" && Date.now() >= getStreakCycleTimes(streak).cycleEndAt.getTime()) {
     await finalizeExpiredStreak(streak);
     rows = await db.select().from(customerStreaksTable)
       .where(eq(customerStreaksTable.customerPhone, normalized))
@@ -506,14 +552,17 @@ export async function getStreakSnapshot(phone: string): Promise<StreakSnapshot |
   const prize = await getPrizeForStreak(streak);
   const progress = await getStreakProgress(streak);
   const minOrders = streakOrderTarget(streak, prize);
-  const daysLeft = streak.status === "active" ? daysBetween(todayUAE(), streak.cycleEndDate) : 0;
+  const cycleTimes = getStreakCycleTimes(streak);
+  const daysLeft = streak.status === "active"
+    ? Math.max(0, Math.ceil((cycleTimes.cycleEndAt.getTime() - Date.now()) / DAY_MS))
+    : 0;
   const ordersRemaining = Math.max(0, minOrders - progress.orderCount);
   return {
     streakCode: streak.streakCode,
     activeDays: progress.activeDates.length,
     ordersCompleted: progress.orderCount,
     winningProgress: progress.orderCount,
-    cycleLength: daysBetween(streak.cycleStartDate, streak.cycleEndDate) + 1,
+    cycleLength: cycleTimes.cycleLengthDays,
     minOrders,
     minDays: minOrders,
     daysLeft,
@@ -524,6 +573,8 @@ export async function getStreakSnapshot(phone: string): Promise<StreakSnapshot |
     status: streak.status,
     cycleStartDate: streak.cycleStartDate,
     cycleEndDate: streak.cycleEndDate,
+    cycleStartAt: cycleTimes.cycleStartAt.toISOString(),
+    cycleEndAt: cycleTimes.cycleEndAt.toISOString(),
     message: generateStreakMessage({
       ordersCompleted: progress.orderCount,
       minOrders,
@@ -533,7 +584,8 @@ export async function getStreakSnapshot(phone: string): Promise<StreakSnapshot |
       prize,
       streakCode: streak.streakCode,
       cycleEnded: streak.status !== "active",
-      cycleEndDate: streak.cycleEndDate,
+      cycleStartAt: cycleTimes.cycleStartAt,
+      cycleEndAt: cycleTimes.cycleEndAt,
     }),
     customerName: streak.customerName,
     customerPhone: displayCustomerStreakIdentity(streak.customerPhone, streak.customerName),
@@ -541,10 +593,14 @@ export async function getStreakSnapshot(phone: string): Promise<StreakSnapshot |
 }
 
 export async function processEndingStreaks(): Promise<number> {
-  const today = todayUAE();
-  const ending = await db.select().from(customerStreaksTable).where(
-    and(lt(customerStreaksTable.cycleEndDate, today), eq(customerStreaksTable.status, "active")),
+  const now = new Date();
+  const candidates = await db.select().from(customerStreaksTable).where(
+    and(
+      eq(customerStreaksTable.status, "active"),
+      or(isNull(customerStreaksTable.cycleEndAt), lte(customerStreaksTable.cycleEndAt, now)),
+    ),
   );
+  const ending = candidates.filter(streak => getStreakCycleTimes(streak).cycleEndAt.getTime() <= now.getTime());
   for (const streak of ending) await finalizeExpiredStreak(streak);
   return ending.length;
 }

@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
 import { getApiBase } from "@/lib/api-base";
+import { formatStreakCountdown, formatStreakDateTime } from "@/lib/streak-time";
 
 const BASE = getApiBase();
 const token = () => localStorage.getItem("tg_erp_token") ?? "";
@@ -51,6 +52,8 @@ type Streak = {
   displayStatus: string;
   cycleStartDate: string;
   cycleEndDate: string;
+  cycleStartAt: string;
+  cycleEndAt: string;
   daysLeft: number;
   prize: { name: string } | null;
 };
@@ -80,6 +83,7 @@ export default function Streaks() {
   const [showForm, setShowForm] = useState(false);
   const [editingPrizeId, setEditingPrizeId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
+  const [now, setNow] = useState(() => Date.now());
   const [showResetDialog, setShowResetDialog] = useState(false);
   const [resetConfirmation, setResetConfirmation] = useState("");
   const [resetting, setResetting] = useState(false);
@@ -105,6 +109,10 @@ export default function Streaks() {
   }, [toast]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const interval = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   const closeForm = () => {
     setForm(emptyForm);
@@ -236,9 +244,9 @@ export default function Streaks() {
               <div key={streak.id} className="flex flex-wrap items-center justify-between gap-3 p-4">
                 <div>
                   <div className="font-semibold text-zinc-100">{streak.customerName || "Customer"} <span className="ml-2 text-xs text-zinc-600">{streak.customerPhone}</span></div>
-                  <div className="mt-1 text-xs text-zinc-500">Code {streak.streakCode} · Started {streak.cycleStartDate} · Ends {streak.cycleEndDate}</div>
+                  <div className="mt-1 text-xs text-zinc-500">Code {streak.streakCode} · Started {formatStreakDateTime(streak.cycleStartAt)} · Expires {formatStreakDateTime(streak.cycleEndAt)} (Dubai time)</div>
                 </div>
-                <div className="text-right"><div className="font-black text-amber-400">{streak.ordersCompleted}/{streak.minOrdersRequired} orders</div><div className="text-[11px] text-zinc-500">{streak.daysLeft} day(s) left</div><Badge color={streak.displayStatus === "at_risk" ? "red" : "emerald"}>{streak.displayStatus.replace("_", " ")}</Badge></div>
+                <div className="text-right"><div className="font-black text-amber-400">{streak.ordersCompleted}/{streak.minOrdersRequired} orders</div><div className="font-mono text-[11px] text-zinc-400">{formatStreakCountdown(streak.cycleEndAt, now)} left</div><Badge color={streak.displayStatus === "at_risk" ? "red" : "emerald"}>{streak.displayStatus.replace("_", " ")}</Badge></div>
               </div>
             ))}
           </div>
@@ -287,7 +295,7 @@ export default function Streaks() {
           <table className="w-full min-w-[820px] text-left text-sm">
             <thead className="border-b border-zinc-800 text-[10px] uppercase tracking-wider text-zinc-500"><tr><th className="p-3">Customer</th><th className="p-3">Phone</th><th className="p-3">Code</th><th className="p-3">Orders</th><th className="p-3">Cycle</th><th className="p-3">Status</th><th className="p-3">Prize</th></tr></thead>
             <tbody className="divide-y divide-zinc-900">
-              {allStreaks.map(streak => <tr key={streak.id} className="text-zinc-300"><td className="p-3 font-semibold text-zinc-100">{streak.customerName || "Customer"}</td><td className="p-3 text-xs">{streak.customerPhone}</td><td className="p-3 font-mono text-xs text-amber-400">{streak.streakCode}</td><td className="p-3">{streak.ordersCompleted}/{streak.minOrdersRequired}</td><td className="p-3 text-xs text-zinc-500">{streak.cycleStartDate} → {streak.cycleEndDate}</td><td className="p-3"><Badge color={streak.status === "won" ? "violet" : streak.status === "lost" ? "zinc" : streak.displayStatus === "at_risk" ? "red" : "emerald"}>{streak.status === "active" ? streak.displayStatus.replace("_", " ") : streak.status}</Badge></td><td className="p-3 text-xs">{streak.prize?.name ?? "Default"}</td></tr>)}
+              {allStreaks.map(streak => <tr key={streak.id} className="text-zinc-300"><td className="p-3 font-semibold text-zinc-100">{streak.customerName || "Customer"}</td><td className="p-3 text-xs">{streak.customerPhone}</td><td className="p-3 font-mono text-xs text-amber-400">{streak.streakCode}</td><td className="p-3">{streak.ordersCompleted}/{streak.minOrdersRequired}</td><td className="p-3 text-xs text-zinc-500"><div>Start {formatStreakDateTime(streak.cycleStartAt)}</div><div>Expires {formatStreakDateTime(streak.cycleEndAt)}</div>{streak.status === "active" && <div className="font-mono text-zinc-300">{formatStreakCountdown(streak.cycleEndAt, now)} left</div>}</td><td className="p-3"><Badge color={streak.status === "won" ? "violet" : streak.status === "lost" ? "zinc" : streak.displayStatus === "at_risk" ? "red" : "emerald"}>{streak.status === "active" ? streak.displayStatus.replace("_", " ") : streak.status}</Badge></td><td className="p-3 text-xs">{streak.prize?.name ?? "Default"}</td></tr>)}
               {allStreaks.length === 0 && <tr><td colSpan={7} className="p-6 text-center text-sm text-zinc-500">No challenge records yet.</td></tr>}
             </tbody>
           </table>

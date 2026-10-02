@@ -14,6 +14,7 @@ import { authenticate, requireRole, ADMIN_ROLES } from "../middlewares/auth";
 import {
   displayCustomerStreakIdentity,
   getActivePrize,
+  getStreakCycleTimes,
   getStreakSnapshot,
   processDeliveryStreak,
   resolveCustomerStreakIdentity,
@@ -123,10 +124,8 @@ function statusLabel(streak: typeof customerStreaksTable.$inferSelect, minOrders
   if (streak.status === "won") return "winner";
   if (streak.status === "lost") return "reset";
   if (streak.orderCount >= minOrders) return "on_track";
-  const daysLeft = Math.max(
-    0,
-    Math.ceil((new Date(`${streak.cycleEndDate}T00:00:00Z`).getTime() - Date.now()) / 86_400_000),
-  );
+  const { cycleEndAt } = getStreakCycleTimes(streak);
+  const daysLeft = Math.max(0, Math.ceil((cycleEndAt.getTime() - Date.now()) / 86_400_000));
   return daysLeft <= 1 ? "at_risk" : "in_progress";
 }
 
@@ -137,8 +136,9 @@ async function mapStreak(streak: typeof customerStreaksTable.$inferSelect) {
   const minOrders = streak.targetOrders || prize?.minOrdersRequired || prize?.minDaysRequired || 6;
   const ordersCompleted = streak.orderCount || streak.activeDayDates.length || streak.activeDays;
   const ordersRemaining = Math.max(0, minOrders - ordersCompleted);
+  const cycleTimes = getStreakCycleTimes(streak);
   const daysLeft = streak.status === "active"
-    ? Math.max(0, Math.ceil((new Date(`${streak.cycleEndDate}T00:00:00Z`).getTime() - Date.now()) / 86_400_000))
+    ? Math.max(0, Math.ceil((cycleTimes.cycleEndAt.getTime() - Date.now()) / 86_400_000))
     : 0;
   return {
     id: streak.id,
@@ -148,12 +148,14 @@ async function mapStreak(streak: typeof customerStreaksTable.$inferSelect) {
     branchId: streak.branchId,
     cycleStartDate: streak.cycleStartDate,
     cycleEndDate: streak.cycleEndDate,
+    cycleStartAt: cycleTimes.cycleStartAt.toISOString(),
+    cycleEndAt: cycleTimes.cycleEndAt.toISOString(),
     activeDays: streak.activeDays,
     activeDayDates: streak.activeDayDates,
     ordersCompleted,
     ordersRemaining,
     orderDates: streak.activeDayDates,
-    cycleLengthDays: Math.max(1, Math.ceil((new Date(`${streak.cycleEndDate}T00:00:00Z`).getTime() - new Date(`${streak.cycleStartDate}T00:00:00Z`).getTime()) / 86_400_000) + 1),
+    cycleLengthDays: cycleTimes.cycleLengthDays,
     minOrdersRequired: minOrders,
     minDaysRequired: minOrders,
     daysLeft,

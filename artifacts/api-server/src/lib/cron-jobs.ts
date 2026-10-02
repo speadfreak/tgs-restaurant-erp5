@@ -211,8 +211,8 @@ export async function runScheduledWeeklyBackup() {
 }
 
 // ── 6. CUSTOMER STREAK CYCLE PROCESSOR ─────────────────────────────────────
-// 20:05 UTC = 00:05 UAE. The cycle end date is inclusive, so expiry is
-// processed after the final UAE day has finished.
+// Exact cycle timestamps are enforced on order delivery and customer lookup;
+// this job finalizes unvisited cycles shortly after their expiry.
 export async function processStreakCycles() {
   try {
     const processed = await processEndingStreaks();
@@ -242,8 +242,8 @@ export function startCronJobs() {
   // Weekly Google Drive backup + DB clear — Sunday 20:00 UTC (midnight UAE)
   cron.schedule("0 20 * * 0", () => { runScheduledWeeklyBackup().catch(console.error); }, { timezone: "UTC" });
 
-  // Streak cycles close just after midnight UAE (20:05 UTC).
-  cron.schedule("5 20 * * *", () => { processStreakCycles().catch(console.error); }, { timezone: "UTC" });
+  // Check once a minute so challenge records and expiry notifications close promptly.
+  cron.schedule("* * * * *", () => { processStreakCycles().catch(console.error); }, { timezone: "UTC" });
 
-  console.log("[Cron] Phase 4+8 cron jobs scheduled (draw@18UTC, streak@20:05UTC, reset@20UTC, overdue@05UTC, backup@Sun20UTC)");
+  console.log("[Cron] Phase 4+8 cron jobs scheduled (draw@18UTC, streak@each minute, reset@20UTC, overdue@05UTC, backup@Sun20UTC)");
 }

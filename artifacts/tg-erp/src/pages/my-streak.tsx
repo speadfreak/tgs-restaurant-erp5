@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Flame, Search, Trophy, CalendarDays } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { getApiBase } from "@/lib/api-base";
+import { formatStreakCountdown, formatStreakDateTime } from "@/lib/streak-time";
 
 const BASE = getApiBase();
 type Snapshot = {
@@ -10,6 +11,7 @@ type Snapshot = {
   ordersCompleted: number; winningProgress: number; minOrders: number; minDays: number; cycleLength: number;
   daysLeft: number; ordersRemaining: number; daysNeeded: number;
   isWinner: boolean; status: string; cycleStartDate: string; cycleEndDate: string;
+  cycleStartAt: string; cycleEndAt: string;
   prize: { name: string; description: string | null } | null;
 };
 
@@ -18,6 +20,12 @@ export default function MyStreak() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   const lookup = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -49,9 +57,9 @@ export default function MyStreak() {
           <div className="mt-6 space-y-4">
             <div className="rounded-2xl border border-amber-500/30 bg-zinc-950/90 p-5">
               <div className="flex items-start justify-between gap-3"><div><div className="text-xs uppercase tracking-widest text-zinc-500">Streak code</div><div className="code-text mt-1 text-2xl text-amber-400">{snapshot.streakCode}</div><div className="mt-2 font-semibold text-white">{snapshot.customerName || "TG&apos;s customer"}</div></div>{snapshot.isWinner && <Trophy className="h-8 w-8 text-amber-400" />}</div>
-               <div className="mt-6 grid grid-cols-3 gap-2 text-center"><div className="rounded-lg bg-zinc-900 p-3"><div className="text-2xl font-black text-orange-400">{snapshot.ordersCompleted}</div><div className="text-[10px] uppercase text-zinc-500">Orders completed</div></div><div className="rounded-lg bg-zinc-900 p-3"><div className="text-2xl font-black text-emerald-400">{snapshot.minOrders}</div><div className="text-[10px] uppercase text-zinc-500">Orders to win</div></div><div className="rounded-lg bg-zinc-900 p-3"><div className="text-2xl font-black text-blue-400">{snapshot.daysLeft}</div><div className="text-[10px] uppercase text-zinc-500">Days left</div></div></div>
+               <div className="mt-6 grid grid-cols-3 gap-2 text-center"><div className="rounded-lg bg-zinc-900 p-3"><div className="text-2xl font-black text-orange-400">{snapshot.ordersCompleted}</div><div className="text-[10px] uppercase text-zinc-500">Orders completed</div></div><div className="rounded-lg bg-zinc-900 p-3"><div className="text-2xl font-black text-emerald-400">{snapshot.minOrders}</div><div className="text-[10px] uppercase text-zinc-500">Orders to win</div></div><div className="rounded-lg bg-zinc-900 p-3"><div className="text-sm font-black text-blue-400">{snapshot.status === "active" ? formatStreakCountdown(snapshot.cycleEndAt, now) : snapshot.status === "won" ? "Complete" : "Ended"}</div><div className="text-[10px] uppercase text-zinc-500">Time left</div></div></div>
                <div className="mt-4 h-3 overflow-hidden rounded-full bg-zinc-800"><div className="h-full rounded-full bg-gradient-to-r from-orange-500 to-amber-300 transition-all" style={{ width: `${Math.min(100, (snapshot.ordersCompleted / snapshot.minOrders) * 100)}%` }} /></div>
-              <div className="mt-2 flex items-center justify-between text-xs text-zinc-500"><span>{snapshot.cycleStartDate}</span><CalendarDays className="h-3.5 w-3.5" /><span>{snapshot.cycleEndDate}</span></div>
+               <div className="mt-2 space-y-1 text-xs text-zinc-500"><div className="flex items-center gap-2"><CalendarDays className="h-3.5 w-3.5 shrink-0" /><span>Started {formatStreakDateTime(snapshot.cycleStartAt)} Dubai time</span></div><div className="pl-5">Expires {formatStreakDateTime(snapshot.cycleEndAt)} Dubai time</div></div>
             </div>
             <div className={`rounded-xl border p-4 ${snapshot.isWinner ? "border-emerald-500/30 bg-emerald-500/10" : "border-orange-500/20 bg-orange-500/5"}`}>
                <div className="font-bold text-amber-200">{snapshot.isWinner ? `You won ${snapshot.prize?.name ?? "your prize"}!` : snapshot.ordersRemaining > 0 ? `${snapshot.ordersRemaining} more order(s) to win` : "You are on track to win!"}</div>

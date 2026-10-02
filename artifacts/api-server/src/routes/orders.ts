@@ -760,7 +760,9 @@ router.post("/delivery/orders/:id/complete", authenticate, requireRole(...DELIVE
     .where(and(eq(ordersTable.id, id), eq(ordersTable.status, "out_for_delivery")))
     .returning();
   if (!order) { res.status(409).json({ error: "Order is not out for delivery" }); return; }
-  await db.insert(orderStatusHistoryTable).values({ orderId: order.id, status: outcome, changedBy: userId });
+  const [statusEvent] = await db.insert(orderStatusHistoryTable)
+    .values({ orderId: order.id, status: outcome, changedBy: userId })
+    .returning({ changedAt: orderStatusHistoryTable.changedAt });
   let streakInfo: StreakResult | null = null;
   // Commission: credit delivery staff when order is successfully delivered
   if (outcome === "delivered") {
@@ -793,10 +795,11 @@ router.post("/delivery/orders/:id/complete", authenticate, requireRole(...DELIVE
           customerIdentity,
           customerName,
           order.branchId,
+          { deliveredAt: statusEvent?.changedAt ?? new Date() },
         );
       }
     } catch (err) {
-      console.error("[Streak trigger error]", err);
+      req.log.warn({ err, orderId: order.id }, "Could not update delivery streak");
     }
     const custName = order.customerNameDirect ?? `Customer #${order.customerId}`;
     sendTeamsNotification(
