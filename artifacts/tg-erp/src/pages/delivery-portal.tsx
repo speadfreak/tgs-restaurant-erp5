@@ -450,7 +450,9 @@ export default function DeliveryPortal() {
     setActionPending(p => ({ ...p, [id]: true }));
     try {
       const result = await apiFetch(`/api/delivery/orders/${id}/complete`, "POST", { outcome });
-      setOrders(prev => prev.map(o => o.id === id ? { ...o, status: outcome, streakInfo: result?.streakInfo ?? o.streakInfo } : o));
+      setOrders(prev => prev.map(o => o.id === id
+        ? { ...o, status: outcome, streakInfo: outcome === "delivered" ? result?.streakInfo ?? null : o.streakInfo }
+        : o));
       toast({
         title: outcome === "delivered" ? (result?.streakInfo?.isWinner ? "Streak winner!" : "Delivered!") : "Marked failed",
         description: outcome === "delivered" && result?.streakInfo

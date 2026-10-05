@@ -808,7 +808,7 @@ router.post("/delivery/orders/:id/complete", authenticate, requireRole(...DELIVE
     ).catch(() => { /* non-critical */ });
   }
   const response = await buildOrderResponse(order);
-  res.json(streakInfo ? { ...response, streakInfo } : response);
+  res.json(outcome === "delivered" ? { ...response, streakInfo } : response);
 });
 
 export default router;

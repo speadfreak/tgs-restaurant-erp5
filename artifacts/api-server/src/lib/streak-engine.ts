@@ -154,6 +154,24 @@ function createStreakCode(): string {
   return `STK-${randomBytes(4).toString("base64url").replace(/[^A-Z0-9]/gi, "").toUpperCase().slice(0, 6).padEnd(6, "0")}`;
 }
 
+async function createUniqueStreakCode(): Promise<string> {
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const code = createStreakCode();
+    const [existingStreaks, existingCustomers] = await Promise.all([
+      db.select({ id: customerStreaksTable.id })
+        .from(customerStreaksTable)
+        .where(eq(customerStreaksTable.streakCode, code))
+        .limit(1),
+      db.select({ id: customersTable.id })
+        .from(customersTable)
+        .where(eq(customersTable.streakCode, code))
+        .limit(1),
+    ]);
+    if (!existingStreaks[0] && !existingCustomers[0]) return code;
+  }
+  throw new Error("Could not allocate a unique streak challenge code");
+}
+
 function prizeOrderTarget(prize: StreakPrize | null): number {
   return prize?.minOrdersRequired ?? prize?.minDaysRequired ?? DEFAULT_MIN_ORDERS;
 }
@@ -178,24 +196,9 @@ async function ensureCustomerCode(phone: string, name: string): Promise<string> 
   const [customer] = isName
     ? [undefined]
     : await db.select().from(customersTable).where(eq(customersTable.phone, phone));
-  if (customer?.streakCode) return customer.streakCode;
-  if (isName) {
-    const [previousStreak] = await db.select({ streakCode: customerStreaksTable.streakCode })
-      .from(customerStreaksTable)
-      .where(eq(customerStreaksTable.customerPhone, phone))
-      .orderBy(desc(customerStreaksTable.updatedAt), desc(customerStreaksTable.id))
-      .limit(1);
-    if (previousStreak?.streakCode) return previousStreak.streakCode;
-  }
-
-  let code = createStreakCode();
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const [existing] = await db.select({ id: customerStreaksTable.id })
-      .from(customerStreaksTable)
-      .where(eq(customerStreaksTable.streakCode, code));
-    if (!existing) break;
-    code = createStreakCode();
-  }
+  // Challenge codes are unique per cycle. Reusing a completed/lost row's code
+  // makes the next cycle fail its unique constraint and leaves stale progress.
+  const code = await createUniqueStreakCode();
   if (customer) {
     await db.update(customersTable).set({ streakCode: code }).where(eq(customersTable.id, customer.id));
   } else if (!isName) {
