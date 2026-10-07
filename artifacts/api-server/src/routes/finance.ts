@@ -14,6 +14,7 @@ import {
   branchesTable,
   lotteryEntriesTable,
   lotteryWinnersTable,
+  streakActiveDaysTable,
   whatsappMessagesTable,
 } from "@workspace/db";
 import {
@@ -586,6 +587,14 @@ router.post("/finance/cleanup", async (req, res): Promise<void> => {
         .where(inArray(deliveriesTable.orderId, orderIds))
         .returning({ id: deliveriesTable.id })
       : [];
+    // Preserve loyalty challenge history while detaching it from orders being
+    // removed. These links were added after finance cleanup and otherwise make
+    // the parent order delete fail its foreign-key constraint.
+    if (orderIds.length > 0) {
+      await tx.update(streakActiveDaysTable)
+        .set({ orderId: null })
+        .where(inArray(streakActiveDaysTable.orderId, orderIds));
+    }
     const ordersDeleted = orderIds.length > 0
       ? await tx.delete(ordersTable)
         .where(inArray(ordersTable.id, orderIds))
