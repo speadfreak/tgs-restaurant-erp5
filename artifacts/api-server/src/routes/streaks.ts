@@ -276,7 +276,7 @@ router.get("/streaks/dashboard", async (req, res): Promise<void> => {
       endingToday: rows.filter(row => row.cycleEndDate === today).length,
       winnersThisWeek: winners.filter(row => row.wonAt && row.wonAt >= recentWinnerSince).length,
     },
-    active: rows.slice(0, 100),
+    active: rows,
     recentWinners: await Promise.all(winners.map(mapStreak)),
   });
 });

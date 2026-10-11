@@ -250,6 +250,10 @@ export default function DeliveryPortal() {
   const [commissionRate, setCommissionRate] = useState(10);
   const prevReadyCountRef = useRef(0);
   const [lastLucky, setLastLucky] = useState<{ orderCode: string; luckyNumber: number | null; customerName: string; customerPhone: string } | null>(null);
+  const [messageHistoryOpen, setMessageHistoryOpen] = useState(false);
+  const [messageHistoryOrders, setMessageHistoryOrders] = useState<DeliveryOrder[]>([]);
+  const [messageHistorySearch, setMessageHistorySearch] = useState("");
+  const [messageHistoryLoading, setMessageHistoryLoading] = useState(false);
 
   const socket = useSocket({ branchId: user?.branchId ?? undefined, userId: user?.id });
   const isDeliveryStaff = !!user && ["delivery_staff", "super_admin", "branch_manager"].includes(user.role);
@@ -295,6 +299,21 @@ export default function DeliveryPortal() {
     } catch { /* ignore */ }
     setLoadingOrders(false);
   }, [user?.branchId, user?.id]);
+
+  const fetchMessageHistory = useCallback(async () => {
+    setMessageHistoryLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (user?.branchId) params.set("branchId", String(user.branchId));
+      params.set("includeMessageHistory", "true");
+      const data: DeliveryOrder[] = await apiFetch(`/api/delivery/queue?${params}`);
+      setMessageHistoryOrders(data);
+    } catch {
+      toast({ title: "Could not load delivery messages", description: "Refresh and try again.", variant: "destructive" });
+    } finally {
+      setMessageHistoryLoading(false);
+    }
+  }, [user?.branchId, toast]);
 
   // Fetch the admin-configured commission rate — wait until user (and auth token) is ready
   useEffect(() => {
@@ -460,6 +479,7 @@ export default function DeliveryPortal() {
           : "Loop closed",
       });
       fetchOrders();
+      if (messageHistoryOpen) fetchMessageHistory();
     } catch {
       toast({ title: "Error", description: "Could not update", variant: "destructive" });
     }
@@ -513,6 +533,15 @@ export default function DeliveryPortal() {
   const yesterdayLotteryGroups = groupLotteryTickets(yesterdayLottery);
   const ticketCount = (groups: LotteryCustomerGroup[]) =>
     groups.reduce((total, group) => total + group.tickets.length, 0);
+  const normalizedMessageSearch = messageHistorySearch.trim().toLocaleLowerCase();
+  const filteredMessageHistory = messageHistoryOrders
+    .filter(order => !isTodayUAE(order.updatedAt ?? order.createdAt))
+    .filter(order => !normalizedMessageSearch || [
+      order.orderCode,
+      order.customerName,
+      order.customerPhone,
+      order.streakInfo?.streakCode,
+    ].some(value => value?.toLocaleLowerCase().includes(normalizedMessageSearch)));
 
   if (isLoading) return (
     <div className="min-h-screen flex items-center justify-center" style={{ background: "hsl(0 0% 4%)" }}>
@@ -937,6 +966,86 @@ export default function DeliveryPortal() {
                 ))}
               </div>
             )}
+
+            <section className="rounded-xl border border-zinc-800 bg-zinc-950/70">
+              <div className="flex flex-wrap items-center justify-between gap-3 p-4">
+                <div>
+                  <h3 className="font-bold text-violet-300 flex items-center gap-2 text-sm">
+                    <History className="h-4 w-4" />Earlier delivery messages · 10 days
+                  </h3>
+                  <p className="mt-1 text-xs text-zinc-500">Find and copy a streak update after delivery. New deliveries keep the progress message captured at delivery time.</p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="border-violet-500/30 text-violet-300"
+                  onClick={() => {
+                    const open = !messageHistoryOpen;
+                    setMessageHistoryOpen(open);
+                    if (open) fetchMessageHistory();
+                  }}
+                >
+                  {messageHistoryOpen ? "Hide history" : "Show history"}
+                </Button>
+              </div>
+              {messageHistoryOpen && (
+                <div className="space-y-3 border-t border-zinc-800 p-4">
+                  <div className="flex flex-wrap gap-2">
+                    <Input
+                      aria-label="Search delivery message history"
+                      className="min-w-[220px] flex-1 border-zinc-800 bg-zinc-900"
+                      placeholder="Search customer, phone, order, or challenge code"
+                      value={messageHistorySearch}
+                      onChange={event => setMessageHistorySearch(event.target.value)}
+                    />
+                    <Button size="sm" variant="outline" className="border-zinc-700" disabled={messageHistoryLoading} onClick={fetchMessageHistory}>
+                      {messageHistoryLoading ? "Loading..." : "Refresh"}
+                    </Button>
+                  </div>
+                  {messageHistoryLoading && messageHistoryOrders.length === 0 ? (
+                    <div className="py-5 text-center text-sm text-zinc-500">Loading delivery history...</div>
+                  ) : filteredMessageHistory.length === 0 ? (
+                    <div className="py-5 text-center text-sm text-zinc-500">
+                      {messageHistoryOrders.length === 0 ? "No earlier delivered orders in the last 10 days." : "No delivery messages match this search."}
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {filteredMessageHistory.map(order => (
+                        <div key={order.id} className="queue-card" style={{ borderLeftColor: "hsl(270 70% 60%)" }}>
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <div className="code-text text-lg text-violet-300">{order.orderCode}</div>
+                              <div className="text-sm text-zinc-300">{order.customerName ?? "Customer"}</div>
+                              {order.customerPhone && <div className="text-xs text-zinc-500">{order.customerPhone}</div>}
+                              <div className="mt-1 text-[11px] text-zinc-500">Delivered {formatStreakDateTime(order.updatedAt ?? order.createdAt)}</div>
+                              {order.streakInfo && (
+                                <div className="mt-1 text-xs text-zinc-400">
+                                  Challenge {order.streakInfo.streakCode} · {order.streakInfo.ordersCompleted ?? order.streakInfo.winningProgress}/{order.streakInfo.minOrders ?? order.streakInfo.minDays} orders
+                                </div>
+                              )}
+                            </div>
+                            {order.streakInfo && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="border-violet-500/30 text-violet-300"
+                                onClick={() => navigator.clipboard.writeText(buildDeliveryMessage(order)).then(
+                                  () => toast({ title: "Delivery message copied", description: "Ready to send to the customer" }),
+                                  () => toast({ title: "Copy failed", description: "Use long-press to copy manually", variant: "destructive" }),
+                                )}
+                              >
+                                <Copy className="mr-1.5 h-3 w-3" />{order.streakInfo.isWinner ? "Copy Winner Message" : "Copy Message + Streak Update"}
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {messageHistoryOrders.length >= 300 && <p className="text-center text-[11px] text-zinc-600">Showing the latest 300 delivered orders. Narrow your search to find a message faster.</p>}
+                </div>
+              )}
+            </section>
 
             {/* ── TODAY'S LOTTERY HANDOFF ── */}
             {todayLotteryGroups.length > 0 && (

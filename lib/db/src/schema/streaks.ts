@@ -48,6 +48,7 @@ export const streakActiveDaysTable = pgTable("streak_active_days", {
   streakId: integer("streak_id").notNull().references(() => customerStreaksTable.id),
   activeDate: date("active_date", { mode: "string" }).notNull(),
   orderId: integer("order_id").references(() => ordersTable.id),
+  messageSnapshot: jsonb("message_snapshot"),
   recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
   streakOrderUnique: unique("streak_active_days_streak_order_unique").on(table.streakId, table.orderId),

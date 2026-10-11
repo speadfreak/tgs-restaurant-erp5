@@ -3,9 +3,10 @@ import * as crypto from "crypto";
 import {
   db, cronJobLogsTable,
   lotteryEntriesTable, lotterySettingsTable, lotteryDrawsTable, lotteryWinnersTable,
-  importShipmentsTable, ordersTable, branchesTable,
+  importShipmentsTable, ordersTable, branchesTable, customerStreaksTable,
+  streakActiveDaysTable, customersTable,
 } from "@workspace/db";
-import { eq, and, or, sql } from "drizzle-orm";
+import { eq, and, or, sql, lt, inArray } from "drizzle-orm";
 import { sendWhatsAppMessage } from "./twilio";
 import { getSetting } from "./settings";
 import { runWeeklyBackup } from "./weekly-backup";
@@ -222,6 +223,64 @@ export async function processStreakCycles() {
   }
 }
 
+// Keep lost/reset cycles available for the 7-day review period plus 3-day
+// cross-check window, then remove their progress rows and challenge records.
+// Active challenges and winners are deliberately retained.
+export async function purgeExpiredLostStreaks() {
+  const cutoff = new Date(Date.now() - 10 * 86_400_000);
+  let deletedChallenges = 0;
+
+  try {
+    while (true) {
+      const deletedInBatch = await db.transaction(async (tx) => {
+        const expired = await tx.select({
+          id: customerStreaksTable.id,
+          streakCode: customerStreaksTable.streakCode,
+        }).from(customerStreaksTable)
+          .where(and(
+            eq(customerStreaksTable.status, "lost"),
+            lt(customerStreaksTable.updatedAt, cutoff),
+          ))
+          .limit(500);
+
+        if (expired.length === 0) return 0;
+
+        const streakIds = expired.map(streak => streak.id);
+        const streakCodes = expired.map(streak => streak.streakCode);
+
+        await tx.delete(streakActiveDaysTable)
+          .where(inArray(streakActiveDaysTable.streakId, streakIds));
+        await tx.update(customersTable)
+          .set({ currentStreakId: null })
+          .where(inArray(customersTable.currentStreakId, streakIds));
+        await tx.update(customersTable)
+          .set({ streakCode: null })
+          .where(inArray(customersTable.streakCode, streakCodes));
+
+        const deleted = await tx.delete(customerStreaksTable)
+          .where(and(
+            inArray(customerStreaksTable.id, streakIds),
+            eq(customerStreaksTable.status, "lost"),
+            lt(customerStreaksTable.updatedAt, cutoff),
+          ))
+          .returning({ id: customerStreaksTable.id });
+        return deleted.length;
+      });
+
+      if (deletedInBatch === 0) break;
+      deletedChallenges += deletedInBatch;
+    }
+
+    await logJob(
+      "streak_data_retention",
+      true,
+      `Removed ${deletedChallenges} lost/reset challenge(s) older than 10 days; active challenges and winners retained`,
+    );
+  } catch (err) {
+    await logJob("streak_data_retention", false, String(err));
+  }
+}
+
 // ── START ALL CRON JOBS ─────────────────────────────────────────────────────
 export function startCronJobs() {
   // Daily draw at 18:00 UTC (22:00 UAE)
@@ -245,5 +304,8 @@ export function startCronJobs() {
   // Check once a minute so challenge records and expiry notifications close promptly.
   cron.schedule("* * * * *", () => { processStreakCycles().catch(console.error); }, { timezone: "UTC" });
 
-  console.log("[Cron] Phase 4+8 cron jobs scheduled (draw@18UTC, streak@each minute, reset@20UTC, overdue@05UTC, backup@Sun20UTC)");
+  // Daily cleanup after the 7-day review period plus 3-day cross-check window.
+  cron.schedule("30 2 * * *", () => { purgeExpiredLostStreaks().catch(console.error); }, { timezone: "UTC" });
+
+  console.log("[Cron] Phase 4+8 cron jobs scheduled (draw@18UTC, streak@each minute, retention@02:30UTC, reset@20UTC, overdue@05UTC, backup@Sun20UTC)");
 }

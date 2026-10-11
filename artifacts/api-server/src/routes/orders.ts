@@ -1,6 +1,6 @@
 import { Router } from "express";
-import { eq, desc, asc, and, gte, lt, inArray } from "drizzle-orm";
-import { db, ordersTable, orderItemsTable, customersTable, branchesTable, menuItemsTable, orderStatusHistoryTable, usersTable, lotteryEntriesTable, lotterySettingsTable, commissionsTable, settingsTable, deliveriesTable } from "@workspace/db";
+import { eq, desc, asc, and, or, gte, lt, inArray, isNotNull } from "drizzle-orm";
+import { db, ordersTable, orderItemsTable, customersTable, branchesTable, menuItemsTable, orderStatusHistoryTable, usersTable, lotteryEntriesTable, lotterySettingsTable, commissionsTable, settingsTable, deliveriesTable, streakActiveDaysTable } from "@workspace/db";
 import { sendTeamsNotification } from "../lib/teams";
 import { sendWhatsAppMessage } from "../lib/twilio";
 import {
@@ -32,6 +32,7 @@ import {
   processDeliveryStreak,
   resolveCustomerStreakIdentity,
   type StreakResult,
+  type StreakSnapshot,
 } from "../lib/streak-engine";
 
 const router: Router = Router();
@@ -488,14 +489,30 @@ router.get("/delivery/queue", authenticate, requireRole(...DELIVERY_ROLES), asyn
   const branchId = queryBranchId ?? req.user?.branchId ?? null;
   const includeHistory = req.query.includeHistory === "true";
   const includeLotteryHistory = req.query.includeLotteryHistory === "true";
+  const includeMessageHistory = req.query.includeMessageHistory === "true";
   const isAdmin = ADMIN_ROLES.includes(req.user!.role);
+  const messageHistoryCutoff = new Date(Date.now() - 10 * 86_400_000);
 
   const activeStatuses = ["ready", "assigned", "out_for_delivery"];
   const relayStatuses = ["pending_acceptance", "pending", "confirmed"];
   const allStatuses = [...activeStatuses, ...relayStatuses, "delivered", "failed"];
 
-  let rows = await db.select().from(ordersTable).orderBy(desc(ordersTable.updatedAt));
+  let rows = includeMessageHistory
+    ? await db.select().from(ordersTable)
+      .where(and(
+        eq(ordersTable.status, "delivered"),
+        gte(ordersTable.updatedAt, messageHistoryCutoff),
+        branchId ? eq(ordersTable.branchId, branchId) : undefined,
+        !isAdmin ? or(
+          eq(ordersTable.assignedDeliveryUserId, req.user!.id),
+          eq(ordersTable.relayedByUserId, req.user!.id),
+        ) : undefined,
+      ))
+      .orderBy(desc(ordersTable.updatedAt))
+      .limit(300)
+    : await db.select().from(ordersTable).orderBy(desc(ordersTable.updatedAt));
   rows = rows.filter(o => {
+    if (includeMessageHistory) return o.status === "delivered";
     if ((includeHistory || includeLotteryHistory) && ["delivered", "failed"].includes(o.status)) return true;
     if (activeStatuses.includes(o.status)) return true;
     return relayStatuses.includes(o.status) && o.relayedByUserId === req.user!.id;
@@ -504,7 +521,7 @@ router.get("/delivery/queue", authenticate, requireRole(...DELIVERY_ROLES), asyn
 
   // Completed orders are intentionally bounded, but the lottery handoff keeps
   // yesterday available so a rider can still send a message after midnight.
-  if (includeHistory || includeLotteryHistory) {
+  if (!includeMessageHistory && (includeHistory || includeLotteryHistory)) {
     const uaeTodayStr = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" });
     const startOfUAEToday = new Date(uaeTodayStr + "T00:00:00+04:00");
     // Calculate the previous UAE calendar date from a UTC date label before
@@ -542,13 +559,14 @@ router.get("/delivery/queue", authenticate, requireRole(...DELIVERY_ROLES), asyn
   const allUsers = await db.select({ id: usersTable.id, name: usersTable.name }).from(usersTable);
   const userMap = new Map(allUsers.map(u => [u.id, u.name]));
 
-  const sliced = rows.slice(0, 100);
+  const sliced = rows.slice(0, includeMessageHistory ? 300 : 100);
   const orderIds = sliced.map(o => o.id);
+  const customerIds = [...new Set(sliced.flatMap(o => o.customerId === null ? [] : [o.customerId]))];
 
-  // Batch-fetch all items and lottery entries for the returned order set
-  const [allItems, allLotteryEntries] = await Promise.all([
+  // Batch-fetch related records only for the returned order set.
+  const [allItems, allLotteryEntries, streakSnapshots, customers] = await Promise.all([
     orderIds.length
-      ? db.select().from(orderItemsTable)
+      ? db.select().from(orderItemsTable).where(inArray(orderItemsTable.orderId, orderIds))
       : Promise.resolve([] as (typeof orderItemsTable.$inferSelect)[]),
     orderIds.length
       ? db.select({
@@ -558,6 +576,20 @@ router.get("/delivery/queue", authenticate, requireRole(...DELIVERY_ROLES), asyn
         drawDate: lotteryEntriesTable.drawDate,
       }).from(lotteryEntriesTable).where(inArray(lotteryEntriesTable.orderId, orderIds)).orderBy(asc(lotteryEntriesTable.id))
       : Promise.resolve([] as Array<{ id: number; orderId: number; luckyNumber: number; drawDate: string }>),
+    orderIds.length
+      ? db.select({
+        orderId: streakActiveDaysTable.orderId,
+        messageSnapshot: streakActiveDaysTable.messageSnapshot,
+      }).from(streakActiveDaysTable)
+        .where(and(
+          inArray(streakActiveDaysTable.orderId, orderIds),
+          isNotNull(streakActiveDaysTable.messageSnapshot),
+        ))
+        .orderBy(desc(streakActiveDaysTable.recordedAt))
+      : Promise.resolve([] as Array<{ orderId: number | null; messageSnapshot: unknown | null }>),
+    customerIds.length
+      ? db.select().from(customersTable).where(inArray(customersTable.id, customerIds))
+      : Promise.resolve([] as (typeof customersTable.$inferSelect)[]),
   ]);
   const itemsByOrder = new Map<number, typeof allItems>();
   for (const i of allItems) {
@@ -569,41 +601,58 @@ router.get("/delivery/queue", authenticate, requireRole(...DELIVERY_ROLES), asyn
     if (!lotteryByOrder.has(entry.orderId)) lotteryByOrder.set(entry.orderId, []);
     lotteryByOrder.get(entry.orderId)!.push(entry);
   }
+  const streakSnapshotByOrder = new Map<number, StreakResult>();
+  for (const row of streakSnapshots) {
+    if (row.orderId !== null && row.messageSnapshot && !streakSnapshotByOrder.has(row.orderId)) {
+      streakSnapshotByOrder.set(row.orderId, row.messageSnapshot as StreakResult);
+    }
+  }
+  const customerById = new Map(customers.map(customer => [customer.id, customer]));
 
   // Repair entries missed during order creation before returning the queue.
   // This makes the delivery portal self-healing for legacy orders and
   // transient lottery-generation failures.
-  await Promise.all(
-    sliced.map(async (order) => {
-      const result = await ensureLotteryEntriesForOrder(order, uaeDate(order.createdAt));
-      if (result.created.length) {
-        for (const entry of result.created) {
-          allLotteryEntries.push({
-            id: entry.id,
-            orderId: entry.orderId,
-            luckyNumber: entry.luckyNumber,
-            drawDate: entry.drawDate,
-          });
+  if (!includeMessageHistory) {
+    await Promise.all(
+      sliced.map(async (order) => {
+        const result = await ensureLotteryEntriesForOrder(order, uaeDate(order.createdAt));
+        if (result.created.length) {
+          for (const entry of result.created) {
+            allLotteryEntries.push({
+              id: entry.id,
+              orderId: entry.orderId,
+              luckyNumber: entry.luckyNumber,
+              drawDate: entry.drawDate,
+            });
+          }
         }
-      }
-    }),
-  );
+      }),
+    );
+  }
   lotteryByOrder.clear();
   for (const entry of allLotteryEntries) {
     if (!lotteryByOrder.has(entry.orderId)) lotteryByOrder.set(entry.orderId, []);
     lotteryByOrder.get(entry.orderId)!.push(entry);
   }
 
+  const streakInfoByIdentity = new Map<string, Promise<StreakSnapshot | null>>();
+  const readStreakInfo = (identity: string) => {
+    let pending = streakInfoByIdentity.get(identity);
+    if (!pending) {
+      pending = getStreakSnapshot(identity).catch(() => null);
+      streakInfoByIdentity.set(identity, pending);
+    }
+    return pending;
+  };
   const enriched = await Promise.all(sliced.map(async (order) => {
     const items = itemsByOrder.get(order.id) ?? [];
     const lotteryTickets = lotteryByOrder.get(order.id) ?? [];
-    const customer = order.customerId
-      ? (await db.select().from(customersTable).where(eq(customersTable.id, order.customerId)))[0]
-      : null;
+    const customer = order.customerId ? customerById.get(order.customerId) ?? null : null;
     const customerPhone = order.customerPhoneDirect ?? customer?.phone ?? null;
     const customerName = order.customerNameDirect ?? customer?.name ?? null;
     const customerIdentity = resolveCustomerStreakIdentity(customerPhone, customerName);
-    const streakInfo = customerIdentity ? await getStreakSnapshot(customerIdentity).catch(() => null) : null;
+    const streakInfo = streakSnapshotByOrder.get(order.id) ??
+      (customerIdentity ? await readStreakInfo(customerIdentity) : null);
     return {
       id: order.id,
       orderCode: order.orderCode,
@@ -797,6 +846,11 @@ router.post("/delivery/orders/:id/complete", authenticate, requireRole(...DELIVE
           order.branchId,
           { deliveredAt: statusEvent?.changedAt ?? new Date() },
         );
+        if (streakInfo) {
+          await db.update(streakActiveDaysTable)
+            .set({ messageSnapshot: streakInfo })
+            .where(eq(streakActiveDaysTable.orderId, order.id));
+        }
       }
     } catch (err) {
       req.log.warn({ err, orderId: order.id }, "Could not update delivery streak");

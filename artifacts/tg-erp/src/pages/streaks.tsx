@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Trophy, Plus, RefreshCw, X, Users, Flame, Pencil, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -58,6 +58,15 @@ type Streak = {
   prize: { name: string } | null;
 };
 
+function matchesChallengeSearch(streak: Streak, search: string): boolean {
+  if (!search) return true;
+  return [
+    streak.customerName,
+    streak.customerPhone,
+    streak.streakCode,
+  ].some(value => value?.toLocaleLowerCase().includes(search));
+}
+
 const emptyForm = {
   name: "",
   description: "",
@@ -87,6 +96,9 @@ export default function Streaks() {
   const [showResetDialog, setShowResetDialog] = useState(false);
   const [resetConfirmation, setResetConfirmation] = useState("");
   const [resetting, setResetting] = useState(false);
+  const [challengeSearch, setChallengeSearch] = useState("");
+  const [daysLeftFilter, setDaysLeftFilter] = useState("");
+  const [cycleEndDateFilter, setCycleEndDateFilter] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -113,6 +125,17 @@ export default function Streaks() {
     const interval = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(interval);
   }, []);
+
+  const normalizedSearch = challengeSearch.trim().toLocaleLowerCase();
+  const filteredActive = useMemo(() => active.filter(streak =>
+    matchesChallengeSearch(streak, normalizedSearch) &&
+    (!daysLeftFilter || streak.daysLeft === Number(daysLeftFilter)) &&
+    (!cycleEndDateFilter || streak.cycleEndDate === cycleEndDateFilter)
+  ), [active, normalizedSearch, daysLeftFilter, cycleEndDateFilter]);
+  const filteredAllStreaks = useMemo(() => allStreaks.filter(streak =>
+    matchesChallengeSearch(streak, normalizedSearch) &&
+    (!cycleEndDateFilter || streak.cycleEndDate === cycleEndDateFilter)
+  ), [allStreaks, normalizedSearch, cycleEndDateFilter]);
 
   const closeForm = () => {
     setForm(emptyForm);
@@ -233,14 +256,68 @@ export default function Streaks() {
         ))}
       </div>
 
+      <section className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
+        <div className="mb-3">
+          <h2 className="font-bold text-white">Find a customer challenge</h2>
+          <p className="text-xs text-zinc-500">Search name, phone, or challenge code. Days left filters active challenges; cycle end date filters both lists.</p>
+        </div>
+        <div className="grid gap-3 md:grid-cols-[minmax(220px,1fr)_160px_190px_auto] md:items-end">
+          <div>
+            <Label htmlFor="streak-customer-search">Customer</Label>
+            <Input
+              id="streak-customer-search"
+              data-testid="input-streak-customer-search"
+              className="mt-1 border-zinc-800 bg-zinc-900"
+              placeholder="Name, phone, or code"
+              value={challengeSearch}
+              onChange={event => setChallengeSearch(event.target.value)}
+            />
+          </div>
+          <div>
+            <Label htmlFor="streak-days-left-filter">Days left</Label>
+            <Input
+              id="streak-days-left-filter"
+              data-testid="input-streak-days-left-filter"
+              className="mt-1 border-zinc-800 bg-zinc-900"
+              type="number"
+              min="0"
+              step="1"
+              placeholder="Any"
+              value={daysLeftFilter}
+              onChange={event => setDaysLeftFilter(event.target.value)}
+            />
+          </div>
+          <div>
+            <Label htmlFor="streak-cycle-end-filter">Cycle ends on</Label>
+            <Input
+              id="streak-cycle-end-filter"
+              data-testid="input-streak-cycle-end-filter"
+              className="mt-1 border-zinc-800 bg-zinc-900"
+              type="date"
+              value={cycleEndDateFilter}
+              onChange={event => setCycleEndDateFilter(event.target.value)}
+            />
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            className="border-zinc-700"
+            disabled={!challengeSearch && !daysLeftFilter && !cycleEndDateFilter}
+            onClick={() => { setChallengeSearch(""); setDaysLeftFilter(""); setCycleEndDateFilter(""); }}
+          >
+            Clear filters
+          </Button>
+        </div>
+      </section>
+
       <div className="grid gap-6 xl:grid-cols-[1.4fr_1fr]">
         <section className="rounded-xl border border-zinc-800 bg-zinc-950/70">
           <div className="flex items-center justify-between border-b border-zinc-800 p-4">
             <div><h2 className="font-bold text-white">Active customer challenges</h2><p className="text-xs text-zinc-500">Each challenge starts with the customer&apos;s first delivered order.</p></div>
-            <Badge color="amber">{active.length} tracked</Badge>
+            <Badge color="amber">{filteredActive.length} of {active.length}</Badge>
           </div>
           <div className="divide-y divide-zinc-900">
-            {loading ? <div className="p-6 text-sm text-zinc-500">Loading...</div> : active.length === 0 ? <div className="p-6 text-sm text-zinc-500">No active challenges yet.</div> : active.map(streak => (
+            {loading ? <div className="p-6 text-sm text-zinc-500">Loading...</div> : filteredActive.length === 0 ? <div className="p-6 text-sm text-zinc-500">{active.length === 0 ? "No active challenges yet." : "No active challenges match these filters."}</div> : filteredActive.map(streak => (
               <div key={streak.id} className="flex flex-wrap items-center justify-between gap-3 p-4">
                 <div>
                   <div className="font-semibold text-zinc-100">{streak.customerName || "Customer"} <span className="ml-2 text-xs text-zinc-600">{streak.customerPhone}</span></div>
@@ -290,13 +367,13 @@ export default function Streaks() {
       </section>
 
       <section className="rounded-xl border border-zinc-800 bg-zinc-950/70">
-        <div className="border-b border-zinc-800 p-4"><h2 className="font-bold text-white">All customer challenges</h2><p className="text-xs text-zinc-500">Active, winner, and reset cycles for customer support and audit.</p></div>
+        <div className="border-b border-zinc-800 p-4"><h2 className="font-bold text-white">All customer challenges</h2><p className="text-xs text-zinc-500">Lost/reset cycles stay available for a 7-day review plus 3-day cross-check, then are automatically removed. Active challenges and winners are retained.</p></div>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[820px] text-left text-sm">
             <thead className="border-b border-zinc-800 text-[10px] uppercase tracking-wider text-zinc-500"><tr><th className="p-3">Customer</th><th className="p-3">Phone</th><th className="p-3">Code</th><th className="p-3">Orders</th><th className="p-3">Cycle</th><th className="p-3">Status</th><th className="p-3">Prize</th></tr></thead>
             <tbody className="divide-y divide-zinc-900">
-              {allStreaks.map(streak => <tr key={streak.id} className="text-zinc-300"><td className="p-3 font-semibold text-zinc-100">{streak.customerName || "Customer"}</td><td className="p-3 text-xs">{streak.customerPhone}</td><td className="p-3 font-mono text-xs text-amber-400">{streak.streakCode}</td><td className="p-3">{streak.ordersCompleted}/{streak.minOrdersRequired}</td><td className="p-3 text-xs text-zinc-500"><div>Start {formatStreakDateTime(streak.cycleStartAt)}</div><div>Expires {formatStreakDateTime(streak.cycleEndAt)}</div>{streak.status === "active" && <div className="font-mono text-zinc-300">{formatStreakCountdown(streak.cycleEndAt, now)} left</div>}</td><td className="p-3"><Badge color={streak.status === "won" ? "violet" : streak.status === "lost" ? "zinc" : streak.displayStatus === "at_risk" ? "red" : "emerald"}>{streak.status === "active" ? streak.displayStatus.replace("_", " ") : streak.status}</Badge></td><td className="p-3 text-xs">{streak.prize?.name ?? "Default"}</td></tr>)}
-              {allStreaks.length === 0 && <tr><td colSpan={7} className="p-6 text-center text-sm text-zinc-500">No challenge records yet.</td></tr>}
+              {filteredAllStreaks.map(streak => <tr key={streak.id} className="text-zinc-300"><td className="p-3 font-semibold text-zinc-100">{streak.customerName || "Customer"}</td><td className="p-3 text-xs">{streak.customerPhone}</td><td className="p-3 font-mono text-xs text-amber-400">{streak.streakCode}</td><td className="p-3">{streak.ordersCompleted}/{streak.minOrdersRequired}</td><td className="p-3 text-xs text-zinc-500"><div>Start {formatStreakDateTime(streak.cycleStartAt)}</div><div>Expires {formatStreakDateTime(streak.cycleEndAt)}</div>{streak.status === "active" && <div className="font-mono text-zinc-300">{formatStreakCountdown(streak.cycleEndAt, now)} left</div>}</td><td className="p-3"><Badge color={streak.status === "won" ? "violet" : streak.status === "lost" ? "zinc" : streak.displayStatus === "at_risk" ? "red" : "emerald"}>{streak.status === "active" ? streak.displayStatus.replace("_", " ") : streak.status}</Badge></td><td className="p-3 text-xs">{streak.prize?.name ?? "Default"}</td></tr>)}
+              {filteredAllStreaks.length === 0 && <tr><td colSpan={7} className="p-6 text-center text-sm text-zinc-500">{allStreaks.length === 0 ? "No challenge records yet." : "No challenge records match these filters."}</td></tr>}
             </tbody>
           </table>
         </div>

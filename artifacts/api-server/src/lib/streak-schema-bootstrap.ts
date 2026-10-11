@@ -107,9 +107,15 @@ export async function ensureStreakSchema(): Promise<void> {
       streak_id integer NOT NULL REFERENCES customer_streaks(id),
       active_date date NOT NULL,
       order_id integer REFERENCES orders(id),
+      message_snapshot jsonb,
       recorded_at timestamptz NOT NULL DEFAULT now(),
       CONSTRAINT streak_active_days_streak_date_unique UNIQUE (streak_id, active_date)
     )
+  `);
+
+  await db.execute(sql`
+    ALTER TABLE streak_active_days
+      ADD COLUMN IF NOT EXISTS message_snapshot jsonb
   `);
 
   await db.execute(sql`
