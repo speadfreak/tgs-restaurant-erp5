@@ -182,6 +182,14 @@ function buildLotteryMessage(group: LotteryCustomerGroup): string {
   ].join("\n");
 }
 
+function boldEnglishFoodieChallenge(message: string): string {
+  const footerMarker = "\n\n🎫 Challenge code:";
+  const footerStart = message.indexOf(footerMarker);
+  const challengeText = footerStart === -1 ? message : message.slice(0, footerStart);
+  const challengeDetails = footerStart === -1 ? "" : message.slice(footerStart);
+  return `*📊 FOODIE CHALLENGE:*\n*${challengeText}*${challengeDetails}`;
+}
+
 function buildStreakMessage(order: DeliveryOrder): string {
   const streak = order.streakInfo;
   if (!streak) return "";
@@ -207,8 +215,8 @@ function buildStreakMessage(order: DeliveryOrder): string {
     amharicStatus,
     `🎫 Challenge code: ${streak.streakCode}`,
     `🕘 የፈተናው ጊዜ: ${startDateTime} – ${endDateTime} (የዱባይ ሰዓት)`,
-    "📊 FOODIE CHALLENGE:",
-    englishStatus,
+    "*📊 FOODIE CHALLENGE:*",
+    `*${englishStatus}*`,
     `🎫 Challenge code: ${streak.streakCode}`,
     `🕘 Challenge window: ${startDateTime} – ${endDateTime} (Dubai time)`,
   ].filter(Boolean).join("\n");
@@ -220,7 +228,7 @@ function buildDeliveryMessage(order: DeliveryOrder): string {
   const streakMessage = streak?.message?.am || streak?.message?.en
     ? [
       streak?.message?.am ? `📊 የትዕዛዝ ፈተና፦\n${streak.message.am}` : "",
-      streak?.message?.en ? `📊 FOODIE CHALLENGE:\n${streak.message.en}` : "",
+      streak?.message?.en ? boldEnglishFoodieChallenge(streak.message.en) : "",
     ].filter(Boolean).join("\n\n")
     : buildStreakMessage(order);
   const streakCopy = streakMessage ? `\n\n${streakMessage}` : "";
