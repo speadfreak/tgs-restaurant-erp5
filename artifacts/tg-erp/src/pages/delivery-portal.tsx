@@ -192,12 +192,27 @@ function toVisibleBold(text: string): string {
   }).join("");
 }
 
+const BOLD_CLIPBOARD_START = "\uE000";
+const BOLD_CLIPBOARD_END = "\uE001";
+
+function markClipboardBold(text: string): string {
+  return `${BOLD_CLIPBOARD_START}${text}${BOLD_CLIPBOARD_END}`;
+}
+
 function boldEnglishFoodieChallenge(message: string): string {
   const footerMarker = "\n\n🎫 Challenge code:";
   const footerStart = message.indexOf(footerMarker);
   const challengeText = footerStart === -1 ? message : message.slice(0, footerStart);
   const challengeDetails = footerStart === -1 ? "" : message.slice(footerStart);
   return `📊 ${toVisibleBold("FOODIE CHALLENGE:")}\n${toVisibleBold(challengeText)}${challengeDetails}`;
+}
+
+function boldAmharicFoodieChallenge(message: string): string {
+  const footerMarker = "\n\n🎫 የፈተና ኮድ:";
+  const footerStart = message.indexOf(footerMarker);
+  const challengeText = footerStart === -1 ? message : message.slice(0, footerStart);
+  const challengeDetails = footerStart === -1 ? "" : message.slice(footerStart);
+  return `${markClipboardBold("📊 የትዕዛዝ ፈተና፦")}\n${markClipboardBold(challengeText)}${challengeDetails}`;
 }
 
 function buildStreakMessage(order: DeliveryOrder): string {
@@ -221,8 +236,8 @@ function buildStreakMessage(order: DeliveryOrder): string {
       ? `${remaining} የትዕዛዝ ጊዜ${remaining === 1 ? "" : "ዎች"} ብቻ ${prizeName} ለማግኘት ቀርተዋል! በዚህ ዙር ${progress} አጠናቀዋል። በቀጣይ ትዕዛዝ እንገናኝ!`
       : `በጣፋጭ ጉዞ ላይ ነዎት! በዚህ ዙር ${progress} የትዕዛዝ ጊዜ አጠናቀዋል። ጣፋጭ ትዕዛዝዎን ይቀጥሉ!`;
   return [
-    "📊 የትዕዛዝ ፈተና፦",
-    amharicStatus,
+    markClipboardBold("📊 የትዕዛዝ ፈተና፦"),
+    markClipboardBold(amharicStatus),
     `🎫 Challenge code: ${streak.streakCode}`,
     `🕘 የፈተናው ጊዜ: ${startDateTime} – ${endDateTime} (የዱባይ ሰዓት)`,
     `📊 ${toVisibleBold("FOODIE CHALLENGE:")}`,
@@ -237,12 +252,54 @@ function buildDeliveryMessage(order: DeliveryOrder): string {
   const streak = order.streakInfo;
   const streakMessage = streak?.message?.am || streak?.message?.en
     ? [
-      streak?.message?.am ? `📊 የትዕዛዝ ፈተና፦\n${streak.message.am}` : "",
+      streak?.message?.am ? boldAmharicFoodieChallenge(streak.message.am) : "",
       streak?.message?.en ? boldEnglishFoodieChallenge(streak.message.en) : "",
     ].filter(Boolean).join("\n\n")
     : buildStreakMessage(order);
   const streakCopy = streakMessage ? `\n\n${streakMessage}` : "";
   return `ቲጂ ምግብ ቤት ✨ | TG's Restaurant ✨\n\nThank you for your order! Your food has been delivered. 🍽️\nትዕዛዝዎ ደርሷል። እናመሰግናለን!${luckyPart}${streakCopy}`;
+}
+
+function escapeClipboardHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function buildDeliveryClipboardContent(order: DeliveryOrder): { plainText: string; html: string } {
+  const markedText = buildDeliveryMessage(order);
+  const plainText = markedText
+    .replaceAll(BOLD_CLIPBOARD_START, "*")
+    .replaceAll(BOLD_CLIPBOARD_END, "*");
+  const htmlBody = escapeClipboardHtml(markedText)
+    .replaceAll(BOLD_CLIPBOARD_START, "<strong>")
+    .replaceAll(BOLD_CLIPBOARD_END, "</strong>")
+    .replace(/\n/g, "<br>");
+  return {
+    plainText,
+    html: `<div style="font-family:Arial,sans-serif;line-height:1.5">${htmlBody}</div>`,
+  };
+}
+
+async function copyDeliveryMessage(order: DeliveryOrder): Promise<void> {
+  const { plainText, html } = buildDeliveryClipboardContent(order);
+  if (navigator.clipboard?.write && typeof ClipboardItem !== "undefined") {
+    try {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          "text/plain": new Blob([plainText], { type: "text/plain" }),
+          "text/html": new Blob([html], { type: "text/html" }),
+        }),
+      ]);
+      return;
+    } catch {
+      // Fall back to the WhatsApp-compatible plain-text version below.
+    }
+  }
+  await navigator.clipboard.writeText(plainText);
 }
 
 export default function DeliveryPortal() {
@@ -972,7 +1029,7 @@ export default function DeliveryPortal() {
                         size="sm"
                         variant="outline"
                         className="w-full h-8 mt-3 text-xs font-bold border-violet-500/30 text-violet-300 hover:bg-violet-950/20"
-                        onClick={() => navigator.clipboard.writeText(buildDeliveryMessage(order)).then(
+                        onClick={() => copyDeliveryMessage(order).then(
                           () => toast({ title: "Delivery message copied", description: "Includes the lucky number and bilingual streak update" }),
                           () => toast({ title: "Copy failed", description: "Use long-press to copy manually", variant: "destructive" }),
                         )}
@@ -1047,7 +1104,7 @@ export default function DeliveryPortal() {
                                 size="sm"
                                 variant="outline"
                                 className="border-violet-500/30 text-violet-300"
-                                onClick={() => navigator.clipboard.writeText(buildDeliveryMessage(order)).then(
+                                onClick={() => copyDeliveryMessage(order).then(
                                   () => toast({ title: "Delivery message copied", description: "Ready to send to the customer" }),
                                   () => toast({ title: "Copy failed", description: "Use long-press to copy manually", variant: "destructive" }),
                                 )}
