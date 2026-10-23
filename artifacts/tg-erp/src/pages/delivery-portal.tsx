@@ -182,12 +182,22 @@ function buildLotteryMessage(group: LotteryCustomerGroup): string {
   ].join("\n");
 }
 
+function toVisibleBold(text: string): string {
+  return Array.from(text, character => {
+    const codePoint = character.codePointAt(0)!;
+    if (codePoint >= 0x41 && codePoint <= 0x5a) return String.fromCodePoint(0x1d5d4 + codePoint - 0x41);
+    if (codePoint >= 0x61 && codePoint <= 0x7a) return String.fromCodePoint(0x1d5ee + codePoint - 0x61);
+    if (codePoint >= 0x30 && codePoint <= 0x39) return String.fromCodePoint(0x1d7ec + codePoint - 0x30);
+    return character;
+  }).join("");
+}
+
 function boldEnglishFoodieChallenge(message: string): string {
   const footerMarker = "\n\n🎫 Challenge code:";
   const footerStart = message.indexOf(footerMarker);
   const challengeText = footerStart === -1 ? message : message.slice(0, footerStart);
   const challengeDetails = footerStart === -1 ? "" : message.slice(footerStart);
-  return `*📊 FOODIE CHALLENGE:*\n*${challengeText}*${challengeDetails}`;
+  return `📊 ${toVisibleBold("FOODIE CHALLENGE:")}\n${toVisibleBold(challengeText)}${challengeDetails}`;
 }
 
 function buildStreakMessage(order: DeliveryOrder): string {
@@ -215,8 +225,8 @@ function buildStreakMessage(order: DeliveryOrder): string {
     amharicStatus,
     `🎫 Challenge code: ${streak.streakCode}`,
     `🕘 የፈተናው ጊዜ: ${startDateTime} – ${endDateTime} (የዱባይ ሰዓት)`,
-    "*📊 FOODIE CHALLENGE:*",
-    `*${englishStatus}*`,
+    `📊 ${toVisibleBold("FOODIE CHALLENGE:")}`,
+    toVisibleBold(englishStatus),
     `🎫 Challenge code: ${streak.streakCode}`,
     `🕘 Challenge window: ${startDateTime} – ${endDateTime} (Dubai time)`,
   ].filter(Boolean).join("\n");
