@@ -289,6 +289,34 @@ function buildDeliveryClipboardContent(order: DeliveryOrder): { plainText: strin
   };
 }
 
+function copyTextWithExecCommand(text: string): boolean {
+  if (typeof document === "undefined" || typeof document.execCommand !== "function" || !document.body) {
+    return false;
+  }
+
+  const field = document.createElement("textarea");
+  field.value = text;
+  field.setAttribute("readonly", "");
+  field.setAttribute("aria-hidden", "true");
+  field.style.position = "fixed";
+  field.style.top = "0";
+  field.style.left = "0";
+  field.style.opacity = "0";
+  field.style.fontSize = "16px";
+
+  try {
+    document.body.appendChild(field);
+    field.focus();
+    field.select();
+    field.setSelectionRange(0, field.value.length);
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    field.remove();
+  }
+}
+
 async function copyTextToClipboard(plainText: string, html?: string): Promise<boolean> {
   let clipboard: Clipboard | undefined;
   if (typeof navigator !== "undefined") {
@@ -322,8 +350,9 @@ async function copyTextToClipboard(plainText: string, html?: string): Promise<bo
     }
   }
 
-  // Never report success based only on a legacy command result.
-  return false;
+  // In-app and older mobile browsers may not expose the Clipboard API.
+  // Try the synchronous fallback before opening the manual-copy panel.
+  return copyTextWithExecCommand(plainText);
 }
 export default function DeliveryPortal() {
   const { user, logout, isLoading } = useAuth();
