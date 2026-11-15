@@ -289,24 +289,67 @@ function buildDeliveryClipboardContent(order: DeliveryOrder): { plainText: strin
   };
 }
 
-async function copyDeliveryMessage(order: DeliveryOrder): Promise<void> {
-  const { plainText, html } = buildDeliveryClipboardContent(order);
-  if (navigator.clipboard?.write && typeof ClipboardItem !== "undefined") {
+function copyTextWithExecCommand(text: string): boolean {
+  if (typeof document === "undefined" || typeof document.execCommand !== "function") return false;
+  let field: HTMLTextAreaElement | null = null;
+  try {
+    field = document.createElement("textarea");
+    field.value = text;
+    field.setAttribute("readonly", "");
+    field.setAttribute("aria-hidden", "true");
+    field.style.position = "fixed";
+    field.style.left = "-9999px";
+    field.style.top = "0";
+    field.style.opacity = "0";
+    document.body.appendChild(field);
+    field.focus();
+    field.select();
+    field.setSelectionRange(0, field.value.length);
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    field?.remove();
+  }
+}
+
+async function copyTextToClipboard(plainText: string, html?: string): Promise<boolean> {
+  // Start the synchronous fallback during the original tap, before browser activation expires.
+  const legacyCopied = copyTextWithExecCommand(plainText);
+  let clipboard: Clipboard | undefined;
+  if (typeof navigator !== "undefined") {
     try {
-      await navigator.clipboard.write([
+      clipboard = navigator.clipboard;
+    } catch {
+      clipboard = undefined;
+    }
+  }
+
+  if (html && clipboard?.write && typeof ClipboardItem !== "undefined") {
+    try {
+      await clipboard.write([
         new ClipboardItem({
           "text/plain": new Blob([plainText], { type: "text/plain" }),
           "text/html": new Blob([html], { type: "text/html" }),
         }),
       ]);
-      return;
+      return true;
     } catch {
-      // Fall back to the WhatsApp-compatible plain-text version below.
+      // Try plain text, then use the synchronous copy result.
     }
   }
-  await navigator.clipboard.writeText(plainText);
-}
 
+  if (clipboard?.writeText) {
+    try {
+      await clipboard.writeText(plainText);
+      return true;
+    } catch {
+      // Permissions or an insecure context can block browser clipboard access.
+    }
+  }
+
+  return legacyCopied;
+}
 export default function DeliveryPortal() {
   const { user, logout, isLoading } = useAuth();
   const [, setLocation] = useLocation();
@@ -334,6 +377,29 @@ export default function DeliveryPortal() {
   const [messageHistoryOrders, setMessageHistoryOrders] = useState<DeliveryOrder[]>([]);
   const [messageHistorySearch, setMessageHistorySearch] = useState("");
   const [messageHistoryLoading, setMessageHistoryLoading] = useState(false);
+  const [manualCopyText, setManualCopyText] = useState<string | null>(null);
+  const manualCopyTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const selectManualCopyText = useCallback(() => {
+    const field = manualCopyTextareaRef.current;
+    if (!field) return;
+    field.focus();
+    field.select();
+    field.setSelectionRange(0, field.value.length);
+  }, []);
+  const copyCustomerMessage = useCallback(async (plainText: string, successTitle: string, successDescription: string, html?: string) => {
+    if (await copyTextToClipboard(plainText, html)) {
+      setManualCopyText(null);
+      toast({ title: successTitle, description: successDescription });
+      return true;
+    }
+    setManualCopyText(plainText);
+    toast({
+      title: "Automatic copy unavailable",
+      description: "The message is ready below. Tap Select all, then choose Copy.",
+      variant: "destructive",
+    });
+    return false;
+  }, [toast]);
 
   const socket = useSocket({ branchId: user?.branchId ?? undefined, userId: user?.id });
   const isDeliveryStaff = !!user && ["delivery_staff", "super_admin", "branch_manager"].includes(user.role);
@@ -742,9 +808,7 @@ export default function DeliveryPortal() {
                     <button
                       onClick={() => {
                         const msg = `🎉 ስለደንበኝነትዎ እናመሰግናለን! | Thank You for Choosing Us!\n\n🎟️ የዕጣ ቁጥርዎ | Your Lucky Number: ${lastLucky.luckyNumber}\n\n📌 እባክዎ ቁጥሩን ይያዙት። | Please keep this number for our upcoming prize draw.`;
-                        navigator.clipboard.writeText(msg).then(() =>
-                          toast({ title: "Copied!", description: "Paste it into WhatsApp for the customer" })
-                        );
+                        void copyCustomerMessage(msg, "Copied!", "Paste it into WhatsApp for the customer");
                       }}
                       className="w-full flex items-center justify-center gap-2 h-10 rounded-lg font-bold text-sm transition-all hover:opacity-90 active:scale-[0.98]"
                       style={{ background: "hsl(38 88% 52%)", color: "hsl(0 0% 4%)" }}
@@ -1034,10 +1098,10 @@ export default function DeliveryPortal() {
                         size="sm"
                         variant="outline"
                         className="w-full h-8 mt-3 text-xs font-bold border-violet-500/30 text-violet-300 hover:bg-violet-950/20"
-                        onClick={() => copyDeliveryMessage(order).then(
-                          () => toast({ title: "Delivery message copied", description: "Includes the lucky number and bilingual streak update" }),
-                          () => toast({ title: "Copy failed", description: "Use long-press to copy manually", variant: "destructive" }),
-                        )}
+                        onClick={() => {
+                          const { plainText, html } = buildDeliveryClipboardContent(order);
+                          void copyCustomerMessage(plainText, "Delivery message copied", "Includes the lucky number and bilingual streak update", html);
+                        }}
                       >
                         <Copy className="h-3 w-3 mr-1.5" />{order.streakInfo.isWinner ? "Copy Winner Message" : "Copy Message + Streak Update"}
                       </Button>
@@ -1109,10 +1173,10 @@ export default function DeliveryPortal() {
                                 size="sm"
                                 variant="outline"
                                 className="border-violet-500/30 text-violet-300"
-                                onClick={() => copyDeliveryMessage(order).then(
-                                  () => toast({ title: "Delivery message copied", description: "Ready to send to the customer" }),
-                                  () => toast({ title: "Copy failed", description: "Use long-press to copy manually", variant: "destructive" }),
-                                )}
+                                onClick={() => {
+                          const { plainText, html } = buildDeliveryClipboardContent(order);
+                          void copyCustomerMessage(plainText, "Delivery message copied", "Ready to send to the customer", html);
+                        }}
                               >
                                 <Copy className="mr-1.5 h-3 w-3" />{order.streakInfo.isWinner ? "Copy Winner Message" : "Copy Message + Streak Update"}
                               </Button>
@@ -1159,10 +1223,10 @@ export default function DeliveryPortal() {
                       size="sm"
                       variant="outline"
                       className="w-full h-9 mt-3 text-xs font-black border-amber-500/40 text-amber-400 hover:bg-amber-950/20"
-                      onClick={() => navigator.clipboard.writeText(buildLotteryMessage(group)).then(
-                        () => toast({ title: "📋 All lottery tickets copied", description: `Ready to send to ${group.name ?? group.phone ?? "the customer"}` }),
-                        () => toast({ title: "Copy failed", description: "Use long-press to copy manually", variant: "destructive" }),
-                      )}
+                      onClick={() => {
+                          const recipient = group.name ?? group.phone ?? "the customer";
+                          void copyCustomerMessage(buildLotteryMessage(group), "📋 All lottery tickets copied", "Ready to send to " + recipient);
+                        }}
                     >
                       <Copy className="h-3.5 w-3.5 mr-1.5" />
                       Copy All {group.tickets.length} {group.tickets.length === 1 ? "Ticket" : "Tickets"}
@@ -1203,10 +1267,10 @@ export default function DeliveryPortal() {
                         size="sm"
                         variant="outline"
                         className="w-full h-8 text-xs font-bold border-amber-500/30 text-amber-400 hover:bg-amber-950/20"
-                        onClick={() => navigator.clipboard.writeText(buildLotteryMessage(group)).then(
-                          () => toast({ title: "All lottery tickets copied", description: `Ready to send to ${group.name ?? group.phone ?? "the customer"}` }),
-                          () => toast({ title: "Copy failed", description: "Use long-press to copy manually", variant: "destructive" }),
-                        )}
+                        onClick={() => {
+                          const recipient = group.name ?? group.phone ?? "the customer";
+                          void copyCustomerMessage(buildLotteryMessage(group), "All lottery tickets copied", "Ready to send to " + recipient);
+                        }}
                       >
                         <Copy className="h-3 w-3 mr-1.5" />Copy All {group.tickets.length} Tickets
                       </Button>
@@ -1224,6 +1288,40 @@ export default function DeliveryPortal() {
           </TabsContent>
         </Tabs>
       </main>
+      {manualCopyText !== null && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="manual-copy-title"
+          onKeyDown={event => { if (event.key === "Escape") setManualCopyText(null); }}
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4"
+        >
+          <div className="w-full max-w-xl space-y-4 rounded-2xl border border-amber-500/40 bg-zinc-950 p-5 shadow-2xl">
+            <div>
+              <h2 id="manual-copy-title" className="text-lg font-black text-amber-300">Copy the message manually</h2>
+              <p className="mt-1 text-sm text-zinc-400">Automatic copy is unavailable. Tap Select all, then choose Copy on your device.</p>
+            </div>
+            <textarea
+              ref={manualCopyTextareaRef}
+              value={manualCopyText}
+              readOnly
+              rows={9}
+              onClick={selectManualCopyText}
+              aria-label="Customer message to copy"
+              className="w-full resize-y rounded-lg border border-zinc-700 bg-zinc-900 p-3 text-sm leading-relaxed text-zinc-100 selection:bg-amber-400 selection:text-black"
+            />
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button type="button" variant="outline" onClick={selectManualCopyText}>
+                <Copy className="mr-1.5 h-4 w-4" />Select all
+              </Button>
+              <Button type="button" variant="outline" onClick={() => setManualCopyText(null)}>Close</Button>
+              <Button type="button" onClick={() => void copyCustomerMessage(manualCopyText ?? "", "Message copied", "Ready to paste into WhatsApp")}>
+                <Copy className="mr-1.5 h-4 w-4" />Try copy again
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
