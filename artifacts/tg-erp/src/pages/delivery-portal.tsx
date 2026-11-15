@@ -289,33 +289,7 @@ function buildDeliveryClipboardContent(order: DeliveryOrder): { plainText: strin
   };
 }
 
-function copyTextWithExecCommand(text: string): boolean {
-  if (typeof document === "undefined" || typeof document.execCommand !== "function") return false;
-  let field: HTMLTextAreaElement | null = null;
-  try {
-    field = document.createElement("textarea");
-    field.value = text;
-    field.setAttribute("readonly", "");
-    field.setAttribute("aria-hidden", "true");
-    field.style.position = "fixed";
-    field.style.left = "-9999px";
-    field.style.top = "0";
-    field.style.opacity = "0";
-    document.body.appendChild(field);
-    field.focus();
-    field.select();
-    field.setSelectionRange(0, field.value.length);
-    return document.execCommand("copy");
-  } catch {
-    return false;
-  } finally {
-    field?.remove();
-  }
-}
-
 async function copyTextToClipboard(plainText: string, html?: string): Promise<boolean> {
-  // Start the synchronous fallback during the original tap, before browser activation expires.
-  const legacyCopied = copyTextWithExecCommand(plainText);
   let clipboard: Clipboard | undefined;
   if (typeof navigator !== "undefined") {
     try {
@@ -335,7 +309,7 @@ async function copyTextToClipboard(plainText: string, html?: string): Promise<bo
       ]);
       return true;
     } catch {
-      // Try plain text, then use the synchronous copy result.
+      // Fall back to plain-text copy.
     }
   }
 
@@ -344,11 +318,12 @@ async function copyTextToClipboard(plainText: string, html?: string): Promise<bo
       await clipboard.writeText(plainText);
       return true;
     } catch {
-      // Permissions or an insecure context can block browser clipboard access.
+      // The message is shown in a selectable panel if the browser blocks copying.
     }
   }
 
-  return legacyCopied;
+  // Never report success based only on a legacy command result.
+  return false;
 }
 export default function DeliveryPortal() {
   const { user, logout, isLoading } = useAuth();
