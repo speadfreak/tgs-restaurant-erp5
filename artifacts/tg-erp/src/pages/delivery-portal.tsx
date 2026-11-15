@@ -215,24 +215,85 @@ function buildChallengeProgressBar(completed: number, target: number): string {
   return "🟩".repeat(filled) + "⬜".repeat(slots - filled);
 }
 
+function getChallengeDateParts(value: string | null | undefined) {
+  const date = value ? new Date(value) : null;
+  if (!date || !Number.isFinite(date.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "Asia/Dubai",
+  }).formatToParts(date);
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find(part => part.type === type)?.value ?? "";
+  return { day: get("day"), month: get("month"), year: get("year") };
+}
+
+function formatChallengeDateRange(startAt: string | null | undefined, endAt: string | null | undefined): string {
+  const start = getChallengeDateParts(startAt);
+  const end = getChallengeDateParts(endAt);
+  if (!start || !end) return "—";
+  if (start.year === end.year && start.month === end.month) return start.day + "–" + end.day + " " + end.month + " " + end.year;
+  if (start.year === end.year) return start.day + " " + start.month + "–" + end.day + " " + end.month + " " + end.year;
+  return start.day + " " + start.month + " " + start.year + "–" + end.day + " " + end.month + " " + end.year;
+}
+
+function formatChallengeDeadline(value: string | null | undefined): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "—";
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    timeZone: "Asia/Dubai",
+  }).formatToParts(date);
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find(part => part.type === type)?.value ?? "";
+  return get("day") + " " + get("month") + " • " + get("hour") + ":" + get("minute");
+}
+
 function formatFoodieChallengeBlock(
+  streak: StreakInfo,
   amharicStatus: string,
   englishStatus: string,
-  streak: StreakInfo,
+  amharicClosing: string,
+  englishClosing: string,
   completed: number,
   target: number,
-  startDateTime: string,
-  endDateTime: string,
+  dateRange: string,
+  deadline: string,
 ): string {
-  const progress = `${completed}/${target}`;
+  const progress = completed + "/" + target;
+  const progressBar = buildChallengeProgressBar(completed, target);
+  const expiryHeading = streak.isWinner
+    ? "⏳ CHALLENGE COMPLETE!"
+    : streak.daysLeft <= 2
+      ? "⏳ YOUR CHALLENGE EXPIRES SOON!"
+      : "⏳ YOUR CHALLENGE WINDOW";
   return [
-    markClipboardAccent("✨ የትዕዛዝ ፈተና | TG FOODIE CHALLENGE"),
-    markClipboardBold(amharicStatus),
+    "━━━━━━━━━━━━━━",
+    markClipboardBold("🏆 TG FOODIE CHALLENGE"),
     markClipboardBold(englishStatus),
-    markClipboardAccent(`📊 እድገት / PROGRESS: ${progress}  ${buildChallengeProgressBar(completed, target)}`),
-    markClipboardGold(`🎟️ ${streak.streakCode || "—"}`),
-    "🕘 የፈተና ጊዜ / TIME:",
-    markClipboardTime(`${startDateTime} – ${endDateTime} (የዱባይ ሰዓት / Dubai time)`),
+    markClipboardAccent("📈 Your Progress: " + progress),
+    progressBar,
+    "",
+    markClipboardBold(expiryHeading),
+    "🗓️ " + dateRange,
+    markClipboardTime("🕘 Deadline: " + deadline + " Dubai Time"),
+    markClipboardGold("🎟️ Code: " + (streak.streakCode || "—")),
+    markClipboardBold(englishClosing),
+    "━━━━━━━━━━━━━━",
+    "",
+    markClipboardBold("🏆 የTG የምግብ ፈተና"),
+    markClipboardBold(amharicStatus),
+    markClipboardAccent("📈 የዚህ ዙር እድገት: " + progress),
+    progressBar,
+    "",
+    markClipboardBold("⏳ የፈተናው ማብቂያ:"),
+    markClipboardTime(deadline + " (የዱባይ ሰዓት)"),
+    "",
+    markClipboardBold(amharicClosing),
   ].join("\n");
 }
 
@@ -240,30 +301,37 @@ function buildStreakMessage(order: DeliveryOrder): string {
   const streak = order.streakInfo;
   if (!streak) return "";
   const prizeName = streak.prize?.name?.replace(/(\d+)%\s*Discount/i, "$1% Off") ?? "your foodie reward";
+  const prizeLabel = /^free meal$/i.test(prizeName) ? "A FREE MEAL" : prizeName.toLocaleUpperCase();
   const completed = streak.ordersCompleted ?? streak.winningProgress;
   const target = streak.minOrders ?? streak.minDays;
-  const remaining = streak.ordersRemaining ?? streak.daysNeeded;
-  const startDateTime = formatStreakDateTime(streak.cycleStartAt);
-  const endDateTime = formatStreakDateTime(streak.cycleEndAt);
+  const remaining = Math.max(0, streak.ordersRemaining ?? streak.daysNeeded);
+  const dateRange = formatChallengeDateRange(streak.cycleStartAt, streak.cycleEndAt);
+  const deadline = formatChallengeDeadline(streak.cycleEndAt);
   const englishStatus = streak.isWinner
-    ? `🏆 You won ${prizeName}! Claim next visit.`
+    ? "🏆 YOU WON " + prizeLabel + "!"
     : remaining > 0
-      ? `${remaining} more ${remaining === 1 ? "order" : "orders"} to earn ${prizeName}!`
-      : "Great progress — keep going!";
+      ? "✨ JUST " + remaining + " MORE " + (remaining === 1 ? "ORDER" : "ORDERS") + " TO WIN " + prizeLabel + "!"
+      : "✨ Great progress — keep going!";
   const amharicStatus = streak.isWinner
-    ? `🏆 ${prizeName} አሸንፈዋል! በቀጣይ ጉብኝት ይውሰዱ።`
+    ? "🏆 በዚህ ዙር አሸንፈዋል!"
     : remaining > 0
-      ? `${remaining} የትዕዛዝ ጊዜ${remaining === 1 ? "" : "ዎች"} ብቻ ${prizeName} ለማግኘት ቀርተዋል!`
+      ? (prizeLabel === "A FREE MEAL" ? "ነፃ ምግብ ለማሸነፍ " : "ሽልማቱን ለማሸነፍ ") + remaining + (remaining === 1 ? " ትዕዛዝ ብቻ ቀርቷል!" : " ትዕዛዞች ብቻ ቀርተዋል!")
       : "ጥሩ እድገት — እንቀጥል!";
+  const englishClosing = streak.isWinner
+    ? "Please claim your reward on your next visit! ❤️"
+    : "Your next order could bring you one step closer to " + (prizeLabel === "A FREE MEAL" ? "a FREE MEAL" : prizeLabel) + "! 🔥";
+  const amharicClosing = streak.isWinner
+    ? "ሽልማትዎን በሚቀጥለው ጉብኝትዎ ይውሰዱ! ❤️"
+    : "በቀጣይ ትዕዛዝዎ ወደ ሽልማትዎ ይበልጥ ይቃረቡ! ❤️";
 
-  return formatFoodieChallengeBlock(amharicStatus, englishStatus, streak, completed, target, startDateTime, endDateTime);
+  return formatFoodieChallengeBlock(streak, amharicStatus, englishStatus, amharicClosing, englishClosing, completed, target, dateRange, deadline);
 }
 
 function buildDeliveryMessage(order: DeliveryOrder): string {
   const luckyPart = order.luckyNumber ? `\n🎯 Lucky Number: #${order.luckyNumber}` : "";
   const streakMessage = buildStreakMessage(order);
   const streakCopy = streakMessage ? `\n\n${streakMessage}` : "";
-  return `ቲጂ ምግብ ቤት ✨ | TG's Restaurant ✨\n\nThank you for your order! Your food has been delivered. 🍽️\nትዕዛዝዎ ደርሷል። እናመሰግናለን!${luckyPart}${streakCopy}`;
+  return "ቲጂ ምግብ ቤት | TG's Restaurant ✨\n\nThank you for ordering! Your meal has been delivered. 🍽️\nትዕዛዝዎ ደርሷል። እናመሰግናለን!" + luckyPart + streakCopy;
 }
 
 function escapeClipboardHtml(text: string): string {
