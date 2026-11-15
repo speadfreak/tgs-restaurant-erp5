@@ -194,25 +194,99 @@ function toVisibleBold(text: string): string {
 
 const BOLD_CLIPBOARD_START = "\uE000";
 const BOLD_CLIPBOARD_END = "\uE001";
+const ACCENT_CLIPBOARD_START = "\uE002";
+const ACCENT_CLIPBOARD_END = "\uE003";
+const GOLD_CLIPBOARD_START = "\uE004";
+const GOLD_CLIPBOARD_END = "\uE005";
 
 function markClipboardBold(text: string): string {
   return `${BOLD_CLIPBOARD_START}${text}${BOLD_CLIPBOARD_END}`;
 }
 
-function boldEnglishFoodieChallenge(message: string): string {
-  const footerMarker = "\n\n🎫 Challenge code:";
-  const footerStart = message.indexOf(footerMarker);
-  const challengeText = footerStart === -1 ? message : message.slice(0, footerStart);
-  const challengeDetails = footerStart === -1 ? "" : message.slice(footerStart);
-  return `📊 ${toVisibleBold("FOODIE CHALLENGE:")}\n${toVisibleBold(challengeText)}${challengeDetails}`;
+function markClipboardAccent(text: string): string {
+  return `${ACCENT_CLIPBOARD_START}${text}${ACCENT_CLIPBOARD_END}`;
 }
 
-function boldAmharicFoodieChallenge(message: string): string {
-  const footerMarker = "\n\n🎫 የፈተና ኮድ:";
-  const footerStart = message.indexOf(footerMarker);
-  const challengeText = footerStart === -1 ? message : message.slice(0, footerStart);
-  const challengeDetails = footerStart === -1 ? "" : message.slice(footerStart);
-  return `${markClipboardBold("📊 የትዕዛዝ ፈተና፦")}\n${markClipboardBold(challengeText)}${challengeDetails}`;
+function markClipboardGold(text: string): string {
+  return `${GOLD_CLIPBOARD_START}${text}${GOLD_CLIPBOARD_END}`;
+}
+
+function extractChallengeStatus(message: string | undefined, language: "am" | "en", fallback: string): string {
+  if (!message?.trim()) return fallback;
+  const normalized = message.replace(/\r\n?/g, "\n");
+  const prefixes = language === "en"
+    ? ["📊 FOODIE CHALLENGE:", "FOODIE CHALLENGE:"]
+    : ["📊 የትዕዛዝ ፈተና፦", "የትዕዛዝ ፈተና፦", "📊 የትዕዛዝ ፈተና:", "የትዕዛዝ ፈተና:"];
+  const lines: string[] = [];
+  for (const originalLine of normalized.split("\n")) {
+    let line = originalLine.trim();
+    if (!line) continue;
+    const lower = line.toLocaleLowerCase();
+    const isCodeLine = lower.startsWith("🎫 challenge code")
+      || lower.startsWith("challenge code")
+      || line.startsWith("🎫 የፈተና ኮድ")
+      || line.startsWith("የፈተና ኮድ");
+    const isWindowLine = lower.startsWith("🕘 challenge window")
+      || lower.startsWith("challenge window")
+      || line.startsWith("🕘 የፈተናው ጊዜ")
+      || line.startsWith("የፈተናው ጊዜ")
+      || line.startsWith("🕘 የፈተና ጊዜ")
+      || line.startsWith("የፈተና ጊዜ");
+    if (isCodeLine || isWindowLine) continue;
+    const prefix = prefixes.find((candidate) => line.toLocaleLowerCase().startsWith(candidate.toLocaleLowerCase()));
+    if (prefix) line = line.slice(prefix.length).trim();
+    if (line) lines.push(line);
+  }
+  return lines.join("\n").trim() || fallback;
+}
+
+function buildChallengeProgressBar(completed: number, target: number): string {
+  const safeTarget = Number.isFinite(target) && target > 0 ? target : 1;
+  const safeCompleted = Number.isFinite(completed) ? Math.max(0, Math.min(completed, safeTarget)) : 0;
+  const slots = 6;
+  const filled = Math.max(0, Math.min(slots, Math.round((safeCompleted / safeTarget) * slots)));
+  return "🟩".repeat(filled) + "⬜".repeat(slots - filled);
+}
+
+function formatFoodieChallengeBlock(
+  language: "am" | "en",
+  status: string,
+  streak: StreakInfo,
+  completed: number,
+  target: number,
+  startDateTime: string,
+  endDateTime: string,
+): string {
+  const isAmharic = language === "am";
+  const header = isAmharic
+    ? "╭━━━━━━ ✨ የትዕዛዝ ፈተና ✨ ━━━━━━╮"
+    : `╭━━━━━━ ✨ ${toVisibleBold("TG FOODIE CHALLENGE")} ✨ ━━━━━━╮`;
+  const spotlight = streak.isWinner
+    ? (isAmharic ? "🏆 ሽልማትዎን አሸንፈዋል!" : "🏆 YOUR REWARD IS UNLOCKED!")
+    : (isAmharic ? "✨ ወደ ሽልማትዎ እየተቃረቡ ነው! ✨" : "✨ ONE STEP CLOSER TO YOUR REWARD! ✨");
+  const progress = (isAmharic ? "📈 የዚህ ዙር እድገት  •  " : "📈 ORDER PROGRESS  •  ") + completed + "/" + target;
+  const codeLabel = isAmharic ? "🎟️ የፈተና ኮድ" : "🎟️ YOUR CHALLENGE CODE";
+  const windowLabel = isAmharic ? "🕘 የፈተናው ጊዜ" : "🕘 CHALLENGE WINDOW";
+  const windowText = `${startDateTime} – ${endDateTime}${isAmharic ? " (የዱባይ ሰዓት)" : " (Dubai time)"}`;
+  const closing = streak.isWinner
+    ? (isAmharic ? "╰━━━ ሽልማትዎን በቀጣይ ጉብኝትዎ ይውሰዱ! ━━━╯" : "╰━━━ CLAIM YOUR REWARD ON YOUR NEXT VISIT! ━━━╯")
+    : (isAmharic ? "╰━━━ በቀጣይ ትዕዛዝ እንገናኝ! ━━━╯" : "╰━━━ EVERY ORDER BRINGS YOU CLOSER! ━━━╯");
+
+  return [
+    markClipboardAccent(header),
+    markClipboardBold(spotlight),
+    "━━━━━━━━━━━━━━━━━━━━━━━━",
+    markClipboardBold(status),
+    "",
+    markClipboardAccent(progress),
+    markClipboardGold(buildChallengeProgressBar(completed, target)),
+    "━━━━━━━━━━━━━━━━━━━━━━━━",
+    markClipboardAccent(codeLabel),
+    markClipboardGold(streak.streakCode || "—"),
+    markClipboardAccent(windowLabel),
+    windowText,
+    markClipboardBold(closing),
+  ].join("\n");
 }
 
 function buildStreakMessage(order: DeliveryOrder): string {
@@ -225,37 +299,28 @@ function buildStreakMessage(order: DeliveryOrder): string {
   const progress = `${completed}/${target}`;
   const startDateTime = formatStreakDateTime(streak.cycleStartAt);
   const endDateTime = formatStreakDateTime(streak.cycleEndAt);
-  const englishStatus = streak.isWinner
+  const englishFallback = streak.isWinner
     ? `You completed ${progress} orders and scored ${prizeName}! Please claim your prize on your next visit.`
     : remaining > 0
       ? `Just ${remaining} more ${remaining === 1 ? "order" : "orders"} of delicious meals to score ${prizeName}! You've completed ${progress} orders this cycle. See you next order!`
       : `You're on a delicious roll! You've completed ${progress} orders this cycle. Keep the good food coming!`;
-  const amharicStatus = streak.isWinner
+  const amharicFallback = streak.isWinner
     ? `በዚህ ዙር ${progress} የትዕዛዝ ጊዜ አጠናቀው ${prizeName} አሸንፈዋል! ሽልማትዎን በሚቀጥለው ጉብኝትዎ ይውሰዱ።`
     : remaining > 0
       ? `${remaining} የትዕዛዝ ጊዜ${remaining === 1 ? "" : "ዎች"} ብቻ ${prizeName} ለማግኘት ቀርተዋል! በዚህ ዙር ${progress} አጠናቀዋል። በቀጣይ ትዕዛዝ እንገናኝ!`
       : `በጣፋጭ ጉዞ ላይ ነዎት! በዚህ ዙር ${progress} የትዕዛዝ ጊዜ አጠናቀዋል። ጣፋጭ ትዕዛዝዎን ይቀጥሉ!`;
+  const amharicStatus = extractChallengeStatus(streak.message?.am, "am", amharicFallback);
+  const englishStatus = extractChallengeStatus(streak.message?.en, "en", englishFallback);
+
   return [
-    markClipboardBold("📊 የትዕዛዝ ፈተና፦"),
-    markClipboardBold(amharicStatus),
-    `🎫 Challenge code: ${streak.streakCode}`,
-    `🕘 የፈተናው ጊዜ: ${startDateTime} – ${endDateTime} (የዱባይ ሰዓት)`,
-    `📊 ${toVisibleBold("FOODIE CHALLENGE:")}`,
-    toVisibleBold(englishStatus),
-    `🎫 Challenge code: ${streak.streakCode}`,
-    `🕘 Challenge window: ${startDateTime} – ${endDateTime} (Dubai time)`,
-  ].filter(Boolean).join("\n");
+    formatFoodieChallengeBlock("am", amharicStatus, streak, completed, target, startDateTime, endDateTime),
+    formatFoodieChallengeBlock("en", englishStatus, streak, completed, target, startDateTime, endDateTime),
+  ].join("\n\n");
 }
 
 function buildDeliveryMessage(order: DeliveryOrder): string {
   const luckyPart = order.luckyNumber ? `\n🎯 Lucky Number: #${order.luckyNumber}` : "";
-  const streak = order.streakInfo;
-  const streakMessage = streak?.message?.am || streak?.message?.en
-    ? [
-      streak?.message?.am ? boldAmharicFoodieChallenge(streak.message.am) : "",
-      streak?.message?.en ? boldEnglishFoodieChallenge(streak.message.en) : "",
-    ].filter(Boolean).join("\n\n")
-    : buildStreakMessage(order);
+  const streakMessage = buildStreakMessage(order);
   const streakCopy = streakMessage ? `\n\n${streakMessage}` : "";
   return `ቲጂ ምግብ ቤት ✨ | TG's Restaurant ✨\n\nThank you for your order! Your food has been delivered. 🍽️\nትዕዛዝዎ ደርሷል። እናመሰግናለን!${luckyPart}${streakCopy}`;
 }
@@ -273,14 +338,22 @@ function buildDeliveryClipboardContent(order: DeliveryOrder): { plainText: strin
   const markedText = buildDeliveryMessage(order);
   const plainText = markedText
     .replaceAll(BOLD_CLIPBOARD_START, "*")
-    .replaceAll(BOLD_CLIPBOARD_END, "*");
+    .replaceAll(BOLD_CLIPBOARD_END, "*")
+    .replaceAll(ACCENT_CLIPBOARD_START, "*")
+    .replaceAll(ACCENT_CLIPBOARD_END, "*")
+    .replaceAll(GOLD_CLIPBOARD_START, "*")
+    .replaceAll(GOLD_CLIPBOARD_END, "*");
   const htmlBody = escapeClipboardHtml(markedText)
     .replaceAll(BOLD_CLIPBOARD_START, "<strong>")
     .replaceAll(BOLD_CLIPBOARD_END, "</strong>")
+    .replaceAll(ACCENT_CLIPBOARD_START, '<span style="color:#6d28d9;font-weight:800;font-size:1.12em">')
+    .replaceAll(ACCENT_CLIPBOARD_END, "</span>")
+    .replaceAll(GOLD_CLIPBOARD_START, '<span style="color:#b45309;font-weight:800">')
+    .replaceAll(GOLD_CLIPBOARD_END, "</span>")
     .replace(/\n/g, "<br>");
   return {
     plainText,
-    html: `<div style="font-family:Arial,sans-serif;line-height:1.5">${htmlBody}</div>`,
+    html: `<div style="font-family:Arial,sans-serif;line-height:1.65;color:#1f2937">${htmlBody}</div>`,
   };
 }
 
