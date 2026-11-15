@@ -198,6 +198,8 @@ const ACCENT_CLIPBOARD_START = "\uE002";
 const ACCENT_CLIPBOARD_END = "\uE003";
 const GOLD_CLIPBOARD_START = "\uE004";
 const GOLD_CLIPBOARD_END = "\uE005";
+const TIME_CLIPBOARD_START = "\uE006";
+const TIME_CLIPBOARD_END = "\uE007";
 
 function markClipboardBold(text: string): string {
   return `${BOLD_CLIPBOARD_START}${text}${BOLD_CLIPBOARD_END}`;
@@ -209,6 +211,10 @@ function markClipboardAccent(text: string): string {
 
 function markClipboardGold(text: string): string {
   return `${GOLD_CLIPBOARD_START}${text}${GOLD_CLIPBOARD_END}`;
+}
+
+function markClipboardTime(text: string): string {
+  return `${TIME_CLIPBOARD_START}${text}${TIME_CLIPBOARD_END}`;
 }
 
 function extractChallengeStatus(message: string | undefined, language: "am" | "en", fallback: string): string {
@@ -284,7 +290,7 @@ function formatFoodieChallengeBlock(
     markClipboardAccent(codeLabel),
     markClipboardGold(streak.streakCode || "—"),
     markClipboardAccent(windowLabel),
-    windowText,
+    markClipboardTime(windowText),
     markClipboardBold(closing),
   ].join("\n");
 }
@@ -342,7 +348,9 @@ function buildDeliveryClipboardContent(order: DeliveryOrder): { plainText: strin
     .replaceAll(ACCENT_CLIPBOARD_START, "*")
     .replaceAll(ACCENT_CLIPBOARD_END, "*")
     .replaceAll(GOLD_CLIPBOARD_START, "*")
-    .replaceAll(GOLD_CLIPBOARD_END, "*");
+    .replaceAll(GOLD_CLIPBOARD_END, "*")
+    .replaceAll(TIME_CLIPBOARD_START, "*")
+    .replaceAll(TIME_CLIPBOARD_END, "*");
   const htmlBody = escapeClipboardHtml(markedText)
     .replaceAll(BOLD_CLIPBOARD_START, "<strong>")
     .replaceAll(BOLD_CLIPBOARD_END, "</strong>")
@@ -350,6 +358,8 @@ function buildDeliveryClipboardContent(order: DeliveryOrder): { plainText: strin
     .replaceAll(ACCENT_CLIPBOARD_END, "</span>")
     .replaceAll(GOLD_CLIPBOARD_START, '<span style="color:#b45309;font-weight:800">')
     .replaceAll(GOLD_CLIPBOARD_END, "</span>")
+    .replaceAll(TIME_CLIPBOARD_START, '<span style="color:#9a3412;background-color:#fff7ed;font-weight:800;font-size:1.16em;padding:2px 4px;border-radius:4px">')
+    .replaceAll(TIME_CLIPBOARD_END, "</span>")
     .replace(/\n/g, "<br>");
   return {
     plainText,
