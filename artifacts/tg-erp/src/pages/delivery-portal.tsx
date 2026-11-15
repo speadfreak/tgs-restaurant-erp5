@@ -182,37 +182,39 @@ function buildLotteryMessage(group: LotteryCustomerGroup): string {
   ].join("\n");
 }
 
-function toVisibleBold(text: string): string {
-  return Array.from(text, character => {
-    const codePoint = character.codePointAt(0)!;
-    if (codePoint >= 0x41 && codePoint <= 0x5a) return String.fromCodePoint(0x1d5d4 + codePoint - 0x41);
-    if (codePoint >= 0x61 && codePoint <= 0x7a) return String.fromCodePoint(0x1d5ee + codePoint - 0x61);
-    if (codePoint >= 0x30 && codePoint <= 0x39) return String.fromCodePoint(0x1d7ec + codePoint - 0x30);
-    return character;
-  }).join("");
-}
+function formatFoodieChallenge(message: string, language: "en" | "am"): string {
+  const lines = message.split(/?
+/);
+  const firstDetailIndex = lines.findIndex(line => line.startsWith("🎫"));
+  const bodyLines = (firstDetailIndex < 0 ? lines : lines.slice(0, firstDetailIndex)).filter(Boolean);
+  const detailLines = firstDetailIndex < 0 ? [] : lines.slice(firstDetailIndex).filter(Boolean);
+  const title = language === "en" ? "FOODIE CHALLENGE" : "የትዕዛዝ ፈተና";
+  const completedHeading = language === "en"
+    ? /^🎉\s*FOODIE CHALLENGE COMPLETE!?$/i
+    : /^🎉\s*የትዕዛዝ ፈተናው ተጠናቀቀ!?$/;
+  const styledBody = bodyLines.map(line => {
+    if (completedHeading.test(line)) {
+      return markClipboardBold(language === "en" ? "🏆 CHALLENGE COMPLETE!" : "🏆 ፈተናው ተጠናቀቀ!");
+    }
+    return "🎯 " + markClipboardBold(line);
+  });
+  const styledDetails = detailLines.map(line => {
+    const separatorIndex = line.indexOf(":");
+    if (separatorIndex === -1) return markClipboardBold(line);
+    const label = line.slice(0, separatorIndex + 1).trim();
+    const value = line.slice(separatorIndex + 1).trim();
+    if (line.startsWith("🎫")) return markClipboardBold(label) + "\n" + markClipboardBold(value);
+    return markClipboardBold(label) + "\n" + value;
+  });
 
-const BOLD_CLIPBOARD_START = "\uE000";
-const BOLD_CLIPBOARD_END = "\uE001";
-
-function markClipboardBold(text: string): string {
-  return `${BOLD_CLIPBOARD_START}${text}${BOLD_CLIPBOARD_END}`;
-}
-
-function boldEnglishFoodieChallenge(message: string): string {
-  const footerMarker = "\n\n🎫 Challenge code:";
-  const footerStart = message.indexOf(footerMarker);
-  const challengeText = footerStart === -1 ? message : message.slice(0, footerStart);
-  const challengeDetails = footerStart === -1 ? "" : message.slice(footerStart);
-  return `📊 ${toVisibleBold("FOODIE CHALLENGE:")}\n${toVisibleBold(challengeText)}${challengeDetails}`;
-}
-
-function boldAmharicFoodieChallenge(message: string): string {
-  const footerMarker = "\n\n🎫 የፈተና ኮድ:";
-  const footerStart = message.indexOf(footerMarker);
-  const challengeText = footerStart === -1 ? message : message.slice(0, footerStart);
-  const challengeDetails = footerStart === -1 ? "" : message.slice(footerStart);
-  return `${markClipboardBold("📊 የትዕዛዝ ፈተና፦")}\n${markClipboardBold(challengeText)}${challengeDetails}`;
+  return [
+    "✨━━━━━━━━━━━━✨",
+    "🍽️ " + markClipboardBold(title),
+    "✨━━━━━━━━━━━━✨",
+    ...styledBody,
+    "",
+    ...styledDetails,
+  ].join("\n");
 }
 
 function buildStreakMessage(order: DeliveryOrder): string {
@@ -222,29 +224,33 @@ function buildStreakMessage(order: DeliveryOrder): string {
   const completed = streak.ordersCompleted ?? streak.winningProgress;
   const target = streak.minOrders ?? streak.minDays;
   const remaining = streak.ordersRemaining ?? streak.daysNeeded;
-  const progress = `${completed}/${target}`;
+  const progress = completed + "/" + target;
   const startDateTime = formatStreakDateTime(streak.cycleStartAt);
   const endDateTime = formatStreakDateTime(streak.cycleEndAt);
   const englishStatus = streak.isWinner
-    ? `You completed ${progress} orders and scored ${prizeName}! Please claim your prize on your next visit.`
+    ? "You completed " + progress + " orders and scored " + prizeName + "! Please claim your prize on your next visit."
     : remaining > 0
-      ? `Just ${remaining} more ${remaining === 1 ? "order" : "orders"} of delicious meals to score ${prizeName}! You've completed ${progress} orders this cycle. See you next order!`
-      : `You're on a delicious roll! You've completed ${progress} orders this cycle. Keep the good food coming!`;
+      ? "Just " + remaining + " more " + (remaining === 1 ? "order" : "orders") + " of delicious meals to score " + prizeName + "! You've completed " + progress + " orders this cycle. See you next order!"
+      : "You're on a delicious roll! You've completed " + progress + " orders this cycle. Keep the good food coming!";
   const amharicStatus = streak.isWinner
-    ? `በዚህ ዙር ${progress} የትዕዛዝ ጊዜ አጠናቀው ${prizeName} አሸንፈዋል! ሽልማትዎን በሚቀጥለው ጉብኝትዎ ይውሰዱ።`
+    ? "በዚህ ዙር " + progress + " የትዕዛዝ ጊዜ አጠናቀው " + prizeName + " አሸንፈዋል! ሽልማትዎን በሚቀጥለው ጉብኝትዎ ይውሰዱ።"
     : remaining > 0
-      ? `${remaining} የትዕዛዝ ጊዜ${remaining === 1 ? "" : "ዎች"} ብቻ ${prizeName} ለማግኘት ቀርተዋል! በዚህ ዙር ${progress} አጠናቀዋል። በቀጣይ ትዕዛዝ እንገናኝ!`
-      : `በጣፋጭ ጉዞ ላይ ነዎት! በዚህ ዙር ${progress} የትዕዛዝ ጊዜ አጠናቀዋል። ጣፋጭ ትዕዛዝዎን ይቀጥሉ!`;
+      ? remaining + " የትዕዛዝ ጊዜ" + (remaining === 1 ? "" : "ዎች") + " ብቻ " + prizeName + " ለማግኘት ቀርተዋል! በዚህ ዙር " + progress + " አጠናቀዋል። በቀጣይ ትዕዛዝ እንገናኝ!"
+      : "በጣፋጭ ጉዞ ላይ ነዎት! በዚህ ዙር " + progress + " የትዕዛዝ ጊዜ አጠናቀዋል። ጣፋጭ ትዕዛዝዎን ይቀጥሉ!";
+  const amharicMessage = [
+    amharicStatus,
+    "🎫 የፈተና ኮድ: " + streak.streakCode,
+    "🕘 የፈተናው ጊዜ: " + startDateTime + " – " + endDateTime + " (የዱባይ ሰዓት)",
+  ].join("\n");
+  const englishMessage = [
+    englishStatus,
+    "🎫 Challenge code: " + streak.streakCode,
+    "🕘 Challenge window: " + startDateTime + " – " + endDateTime + " (Dubai time)",
+  ].join("\n");
   return [
-    markClipboardBold("📊 የትዕዛዝ ፈተና፦"),
-    markClipboardBold(amharicStatus),
-    `🎫 Challenge code: ${streak.streakCode}`,
-    `🕘 የፈተናው ጊዜ: ${startDateTime} – ${endDateTime} (የዱባይ ሰዓት)`,
-    `📊 ${toVisibleBold("FOODIE CHALLENGE:")}`,
-    toVisibleBold(englishStatus),
-    `🎫 Challenge code: ${streak.streakCode}`,
-    `🕘 Challenge window: ${startDateTime} – ${endDateTime} (Dubai time)`,
-  ].filter(Boolean).join("\n");
+    formatFoodieChallenge(amharicMessage, "am"),
+    formatFoodieChallenge(englishMessage, "en"),
+  ].join("\n\n");
 }
 
 function buildDeliveryMessage(order: DeliveryOrder): string {
@@ -252,8 +258,8 @@ function buildDeliveryMessage(order: DeliveryOrder): string {
   const streak = order.streakInfo;
   const streakMessage = streak?.message?.am || streak?.message?.en
     ? [
-      streak?.message?.am ? boldAmharicFoodieChallenge(streak.message.am) : "",
-      streak?.message?.en ? boldEnglishFoodieChallenge(streak.message.en) : "",
+      streak?.message?.am ? formatFoodieChallenge(streak.message.am, "am") : "",
+      streak?.message?.en ? formatFoodieChallenge(streak.message.en, "en") : "",
     ].filter(Boolean).join("\n\n")
     : buildStreakMessage(order);
   const streakCopy = streakMessage ? `\n\n${streakMessage}` : "";
