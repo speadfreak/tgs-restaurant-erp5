@@ -183,8 +183,7 @@ function buildLotteryMessage(group: LotteryCustomerGroup): string {
 }
 
 function formatFoodieChallenge(message: string, language: "en" | "am"): string {
-  const lines = message.split(/?
-/);
+  const lines = message.split(/\r?\n/);
   const firstDetailIndex = lines.findIndex(line => line.startsWith("🎫"));
   const bodyLines = (firstDetailIndex < 0 ? lines : lines.slice(0, firstDetailIndex)).filter(Boolean);
   const detailLines = firstDetailIndex < 0 ? [] : lines.slice(firstDetailIndex).filter(Boolean);
