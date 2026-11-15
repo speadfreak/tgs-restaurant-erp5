@@ -182,38 +182,37 @@ function buildLotteryMessage(group: LotteryCustomerGroup): string {
   ].join("\n");
 }
 
-function formatFoodieChallenge(message: string, language: "en" | "am"): string {
-  const lines = message.split(/\r?\n/);
-  const firstDetailIndex = lines.findIndex(line => line.startsWith("🎫"));
-  const bodyLines = (firstDetailIndex < 0 ? lines : lines.slice(0, firstDetailIndex)).filter(Boolean);
-  const detailLines = firstDetailIndex < 0 ? [] : lines.slice(firstDetailIndex).filter(Boolean);
-  const title = language === "en" ? "FOODIE CHALLENGE" : "የትዕዛዝ ፈተና";
-  const completedHeading = language === "en"
-    ? /^🎉\s*FOODIE CHALLENGE COMPLETE!?$/i
-    : /^🎉\s*የትዕዛዝ ፈተናው ተጠናቀቀ!?$/;
-  const styledBody = bodyLines.map(line => {
-    if (completedHeading.test(line)) {
-      return markClipboardBold(language === "en" ? "🏆 CHALLENGE COMPLETE!" : "🏆 ፈተናው ተጠናቀቀ!");
-    }
-    return "🎯 " + markClipboardBold(line);
-  });
-  const styledDetails = detailLines.map(line => {
-    const separatorIndex = line.indexOf(":");
-    if (separatorIndex === -1) return markClipboardBold(line);
-    const label = line.slice(0, separatorIndex + 1).trim();
-    const value = line.slice(separatorIndex + 1).trim();
-    if (line.startsWith("🎫")) return markClipboardBold(label) + "\n" + markClipboardBold(value);
-    return markClipboardBold(label) + "\n" + value;
-  });
+function toVisibleBold(text: string): string {
+  return Array.from(text, character => {
+    const codePoint = character.codePointAt(0)!;
+    if (codePoint >= 0x41 && codePoint <= 0x5a) return String.fromCodePoint(0x1d5d4 + codePoint - 0x41);
+    if (codePoint >= 0x61 && codePoint <= 0x7a) return String.fromCodePoint(0x1d5ee + codePoint - 0x61);
+    if (codePoint >= 0x30 && codePoint <= 0x39) return String.fromCodePoint(0x1d7ec + codePoint - 0x30);
+    return character;
+  }).join("");
+}
 
-  return [
-    "✨━━━━━━━━━━━━✨",
-    "🍽️ " + markClipboardBold(title),
-    "✨━━━━━━━━━━━━✨",
-    ...styledBody,
-    "",
-    ...styledDetails,
-  ].join("\n");
+const BOLD_CLIPBOARD_START = "\uE000";
+const BOLD_CLIPBOARD_END = "\uE001";
+
+function markClipboardBold(text: string): string {
+  return `${BOLD_CLIPBOARD_START}${text}${BOLD_CLIPBOARD_END}`;
+}
+
+function boldEnglishFoodieChallenge(message: string): string {
+  const footerMarker = "\n\n🎫 Challenge code:";
+  const footerStart = message.indexOf(footerMarker);
+  const challengeText = footerStart === -1 ? message : message.slice(0, footerStart);
+  const challengeDetails = footerStart === -1 ? "" : message.slice(footerStart);
+  return `📊 ${toVisibleBold("FOODIE CHALLENGE:")}\n${toVisibleBold(challengeText)}${challengeDetails}`;
+}
+
+function boldAmharicFoodieChallenge(message: string): string {
+  const footerMarker = "\n\n🎫 የፈተና ኮድ:";
+  const footerStart = message.indexOf(footerMarker);
+  const challengeText = footerStart === -1 ? message : message.slice(0, footerStart);
+  const challengeDetails = footerStart === -1 ? "" : message.slice(footerStart);
+  return `${markClipboardBold("📊 የትዕዛዝ ፈተና፦")}\n${markClipboardBold(challengeText)}${challengeDetails}`;
 }
 
 function buildStreakMessage(order: DeliveryOrder): string {
@@ -223,33 +222,29 @@ function buildStreakMessage(order: DeliveryOrder): string {
   const completed = streak.ordersCompleted ?? streak.winningProgress;
   const target = streak.minOrders ?? streak.minDays;
   const remaining = streak.ordersRemaining ?? streak.daysNeeded;
-  const progress = completed + "/" + target;
+  const progress = `${completed}/${target}`;
   const startDateTime = formatStreakDateTime(streak.cycleStartAt);
   const endDateTime = formatStreakDateTime(streak.cycleEndAt);
   const englishStatus = streak.isWinner
-    ? "You completed " + progress + " orders and scored " + prizeName + "! Please claim your prize on your next visit."
+    ? `You completed ${progress} orders and scored ${prizeName}! Please claim your prize on your next visit.`
     : remaining > 0
-      ? "Just " + remaining + " more " + (remaining === 1 ? "order" : "orders") + " of delicious meals to score " + prizeName + "! You've completed " + progress + " orders this cycle. See you next order!"
-      : "You're on a delicious roll! You've completed " + progress + " orders this cycle. Keep the good food coming!";
+      ? `Just ${remaining} more ${remaining === 1 ? "order" : "orders"} of delicious meals to score ${prizeName}! You've completed ${progress} orders this cycle. See you next order!`
+      : `You're on a delicious roll! You've completed ${progress} orders this cycle. Keep the good food coming!`;
   const amharicStatus = streak.isWinner
-    ? "በዚህ ዙር " + progress + " የትዕዛዝ ጊዜ አጠናቀው " + prizeName + " አሸንፈዋል! ሽልማትዎን በሚቀጥለው ጉብኝትዎ ይውሰዱ።"
+    ? `በዚህ ዙር ${progress} የትዕዛዝ ጊዜ አጠናቀው ${prizeName} አሸንፈዋል! ሽልማትዎን በሚቀጥለው ጉብኝትዎ ይውሰዱ።`
     : remaining > 0
-      ? remaining + " የትዕዛዝ ጊዜ" + (remaining === 1 ? "" : "ዎች") + " ብቻ " + prizeName + " ለማግኘት ቀርተዋል! በዚህ ዙር " + progress + " አጠናቀዋል። በቀጣይ ትዕዛዝ እንገናኝ!"
-      : "በጣፋጭ ጉዞ ላይ ነዎት! በዚህ ዙር " + progress + " የትዕዛዝ ጊዜ አጠናቀዋል። ጣፋጭ ትዕዛዝዎን ይቀጥሉ!";
-  const amharicMessage = [
-    amharicStatus,
-    "🎫 የፈተና ኮድ: " + streak.streakCode,
-    "🕘 የፈተናው ጊዜ: " + startDateTime + " – " + endDateTime + " (የዱባይ ሰዓት)",
-  ].join("\n");
-  const englishMessage = [
-    englishStatus,
-    "🎫 Challenge code: " + streak.streakCode,
-    "🕘 Challenge window: " + startDateTime + " – " + endDateTime + " (Dubai time)",
-  ].join("\n");
+      ? `${remaining} የትዕዛዝ ጊዜ${remaining === 1 ? "" : "ዎች"} ብቻ ${prizeName} ለማግኘት ቀርተዋል! በዚህ ዙር ${progress} አጠናቀዋል። በቀጣይ ትዕዛዝ እንገናኝ!`
+      : `በጣፋጭ ጉዞ ላይ ነዎት! በዚህ ዙር ${progress} የትዕዛዝ ጊዜ አጠናቀዋል። ጣፋጭ ትዕዛዝዎን ይቀጥሉ!`;
   return [
-    formatFoodieChallenge(amharicMessage, "am"),
-    formatFoodieChallenge(englishMessage, "en"),
-  ].join("\n\n");
+    markClipboardBold("📊 የትዕዛዝ ፈተና፦"),
+    markClipboardBold(amharicStatus),
+    `🎫 Challenge code: ${streak.streakCode}`,
+    `🕘 የፈተናው ጊዜ: ${startDateTime} – ${endDateTime} (የዱባይ ሰዓት)`,
+    `📊 ${toVisibleBold("FOODIE CHALLENGE:")}`,
+    toVisibleBold(englishStatus),
+    `🎫 Challenge code: ${streak.streakCode}`,
+    `🕘 Challenge window: ${startDateTime} – ${endDateTime} (Dubai time)`,
+  ].filter(Boolean).join("\n");
 }
 
 function buildDeliveryMessage(order: DeliveryOrder): string {
@@ -257,8 +252,8 @@ function buildDeliveryMessage(order: DeliveryOrder): string {
   const streak = order.streakInfo;
   const streakMessage = streak?.message?.am || streak?.message?.en
     ? [
-      streak?.message?.am ? formatFoodieChallenge(streak.message.am, "am") : "",
-      streak?.message?.en ? formatFoodieChallenge(streak.message.en, "en") : "",
+      streak?.message?.am ? boldAmharicFoodieChallenge(streak.message.am) : "",
+      streak?.message?.en ? boldEnglishFoodieChallenge(streak.message.en) : "",
     ].filter(Boolean).join("\n\n")
     : buildStreakMessage(order);
   const streakCopy = streakMessage ? `\n\n${streakMessage}` : "";
@@ -289,71 +284,24 @@ function buildDeliveryClipboardContent(order: DeliveryOrder): { plainText: strin
   };
 }
 
-function copyTextWithExecCommand(text: string): boolean {
-  if (typeof document === "undefined" || typeof document.execCommand !== "function" || !document.body) {
-    return false;
-  }
-
-  const field = document.createElement("textarea");
-  field.value = text;
-  field.setAttribute("readonly", "");
-  field.setAttribute("aria-hidden", "true");
-  field.style.position = "fixed";
-  field.style.top = "0";
-  field.style.left = "0";
-  field.style.opacity = "0";
-  field.style.fontSize = "16px";
-
-  try {
-    document.body.appendChild(field);
-    field.focus();
-    field.select();
-    field.setSelectionRange(0, field.value.length);
-    return document.execCommand("copy");
-  } catch {
-    return false;
-  } finally {
-    field.remove();
-  }
-}
-
-async function copyTextToClipboard(plainText: string, html?: string): Promise<boolean> {
-  let clipboard: Clipboard | undefined;
-  if (typeof navigator !== "undefined") {
+async function copyDeliveryMessage(order: DeliveryOrder): Promise<void> {
+  const { plainText, html } = buildDeliveryClipboardContent(order);
+  if (navigator.clipboard?.write && typeof ClipboardItem !== "undefined") {
     try {
-      clipboard = navigator.clipboard;
-    } catch {
-      clipboard = undefined;
-    }
-  }
-
-  if (html && clipboard?.write && typeof ClipboardItem !== "undefined") {
-    try {
-      await clipboard.write([
+      await navigator.clipboard.write([
         new ClipboardItem({
           "text/plain": new Blob([plainText], { type: "text/plain" }),
           "text/html": new Blob([html], { type: "text/html" }),
         }),
       ]);
-      return true;
+      return;
     } catch {
-      // Fall back to plain-text copy.
+      // Fall back to the WhatsApp-compatible plain-text version below.
     }
   }
-
-  if (clipboard?.writeText) {
-    try {
-      await clipboard.writeText(plainText);
-      return true;
-    } catch {
-      // The message is shown in a selectable panel if the browser blocks copying.
-    }
-  }
-
-  // In-app and older mobile browsers may not expose the Clipboard API.
-  // Try the synchronous fallback before opening the manual-copy panel.
-  return copyTextWithExecCommand(plainText);
+  await navigator.clipboard.writeText(plainText);
 }
+
 export default function DeliveryPortal() {
   const { user, logout, isLoading } = useAuth();
   const [, setLocation] = useLocation();
@@ -381,29 +329,6 @@ export default function DeliveryPortal() {
   const [messageHistoryOrders, setMessageHistoryOrders] = useState<DeliveryOrder[]>([]);
   const [messageHistorySearch, setMessageHistorySearch] = useState("");
   const [messageHistoryLoading, setMessageHistoryLoading] = useState(false);
-  const [manualCopyText, setManualCopyText] = useState<string | null>(null);
-  const manualCopyTextareaRef = useRef<HTMLTextAreaElement>(null);
-  const selectManualCopyText = useCallback(() => {
-    const field = manualCopyTextareaRef.current;
-    if (!field) return;
-    field.focus();
-    field.select();
-    field.setSelectionRange(0, field.value.length);
-  }, []);
-  const copyCustomerMessage = useCallback(async (plainText: string, successTitle: string, successDescription: string, html?: string) => {
-    if (await copyTextToClipboard(plainText, html)) {
-      setManualCopyText(null);
-      toast({ title: successTitle, description: successDescription });
-      return true;
-    }
-    setManualCopyText(plainText);
-    toast({
-      title: "Automatic copy unavailable",
-      description: "The message is ready below. Tap Select all, then choose Copy.",
-      variant: "destructive",
-    });
-    return false;
-  }, [toast]);
 
   const socket = useSocket({ branchId: user?.branchId ?? undefined, userId: user?.id });
   const isDeliveryStaff = !!user && ["delivery_staff", "super_admin", "branch_manager"].includes(user.role);
@@ -812,7 +737,9 @@ export default function DeliveryPortal() {
                     <button
                       onClick={() => {
                         const msg = `🎉 ስለደንበኝነትዎ እናመሰግናለን! | Thank You for Choosing Us!\n\n🎟️ የዕጣ ቁጥርዎ | Your Lucky Number: ${lastLucky.luckyNumber}\n\n📌 እባክዎ ቁጥሩን ይያዙት። | Please keep this number for our upcoming prize draw.`;
-                        void copyCustomerMessage(msg, "Copied!", "Paste it into WhatsApp for the customer");
+                        navigator.clipboard.writeText(msg).then(() =>
+                          toast({ title: "Copied!", description: "Paste it into WhatsApp for the customer" })
+                        );
                       }}
                       className="w-full flex items-center justify-center gap-2 h-10 rounded-lg font-bold text-sm transition-all hover:opacity-90 active:scale-[0.98]"
                       style={{ background: "hsl(38 88% 52%)", color: "hsl(0 0% 4%)" }}
@@ -1102,10 +1029,10 @@ export default function DeliveryPortal() {
                         size="sm"
                         variant="outline"
                         className="w-full h-8 mt-3 text-xs font-bold border-violet-500/30 text-violet-300 hover:bg-violet-950/20"
-                        onClick={() => {
-                          const { plainText } = buildDeliveryClipboardContent(order);
-                          void copyCustomerMessage(plainText, "Delivery message copied", "Includes the lucky number and bilingual streak update");
-                        }}
+                        onClick={() => copyDeliveryMessage(order).then(
+                          () => toast({ title: "Delivery message copied", description: "Includes the lucky number and bilingual streak update" }),
+                          () => toast({ title: "Copy failed", description: "Use long-press to copy manually", variant: "destructive" }),
+                        )}
                       >
                         <Copy className="h-3 w-3 mr-1.5" />{order.streakInfo.isWinner ? "Copy Winner Message" : "Copy Message + Streak Update"}
                       </Button>
@@ -1177,10 +1104,10 @@ export default function DeliveryPortal() {
                                 size="sm"
                                 variant="outline"
                                 className="border-violet-500/30 text-violet-300"
-                                onClick={() => {
-                          const { plainText, html } = buildDeliveryClipboardContent(order);
-                          void copyCustomerMessage(plainText, "Delivery message copied", "Ready to send to the customer", html);
-                        }}
+                                onClick={() => copyDeliveryMessage(order).then(
+                                  () => toast({ title: "Delivery message copied", description: "Ready to send to the customer" }),
+                                  () => toast({ title: "Copy failed", description: "Use long-press to copy manually", variant: "destructive" }),
+                                )}
                               >
                                 <Copy className="mr-1.5 h-3 w-3" />{order.streakInfo.isWinner ? "Copy Winner Message" : "Copy Message + Streak Update"}
                               </Button>
@@ -1227,10 +1154,10 @@ export default function DeliveryPortal() {
                       size="sm"
                       variant="outline"
                       className="w-full h-9 mt-3 text-xs font-black border-amber-500/40 text-amber-400 hover:bg-amber-950/20"
-                      onClick={() => {
-                          const recipient = group.name ?? group.phone ?? "the customer";
-                          void copyCustomerMessage(buildLotteryMessage(group), "📋 All lottery tickets copied", "Ready to send to " + recipient);
-                        }}
+                      onClick={() => navigator.clipboard.writeText(buildLotteryMessage(group)).then(
+                        () => toast({ title: "📋 All lottery tickets copied", description: `Ready to send to ${group.name ?? group.phone ?? "the customer"}` }),
+                        () => toast({ title: "Copy failed", description: "Use long-press to copy manually", variant: "destructive" }),
+                      )}
                     >
                       <Copy className="h-3.5 w-3.5 mr-1.5" />
                       Copy All {group.tickets.length} {group.tickets.length === 1 ? "Ticket" : "Tickets"}
@@ -1271,10 +1198,10 @@ export default function DeliveryPortal() {
                         size="sm"
                         variant="outline"
                         className="w-full h-8 text-xs font-bold border-amber-500/30 text-amber-400 hover:bg-amber-950/20"
-                        onClick={() => {
-                          const recipient = group.name ?? group.phone ?? "the customer";
-                          void copyCustomerMessage(buildLotteryMessage(group), "All lottery tickets copied", "Ready to send to " + recipient);
-                        }}
+                        onClick={() => navigator.clipboard.writeText(buildLotteryMessage(group)).then(
+                          () => toast({ title: "All lottery tickets copied", description: `Ready to send to ${group.name ?? group.phone ?? "the customer"}` }),
+                          () => toast({ title: "Copy failed", description: "Use long-press to copy manually", variant: "destructive" }),
+                        )}
                       >
                         <Copy className="h-3 w-3 mr-1.5" />Copy All {group.tickets.length} Tickets
                       </Button>
@@ -1292,40 +1219,6 @@ export default function DeliveryPortal() {
           </TabsContent>
         </Tabs>
       </main>
-      {manualCopyText !== null && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="manual-copy-title"
-          onKeyDown={event => { if (event.key === "Escape") setManualCopyText(null); }}
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4"
-        >
-          <div className="w-full max-w-xl space-y-4 rounded-2xl border border-amber-500/40 bg-zinc-950 p-5 shadow-2xl">
-            <div>
-              <h2 id="manual-copy-title" className="text-lg font-black text-amber-300">Copy the message manually</h2>
-              <p className="mt-1 text-sm text-zinc-400">Automatic copy is unavailable. Tap Select all, then choose Copy on your device.</p>
-            </div>
-            <textarea
-              ref={manualCopyTextareaRef}
-              value={manualCopyText}
-              readOnly
-              rows={9}
-              onClick={selectManualCopyText}
-              aria-label="Customer message to copy"
-              className="w-full resize-y rounded-lg border border-zinc-700 bg-zinc-900 p-3 text-sm leading-relaxed text-zinc-100 selection:bg-amber-400 selection:text-black"
-            />
-            <div className="flex flex-wrap justify-end gap-2">
-              <Button type="button" variant="outline" onClick={selectManualCopyText}>
-                <Copy className="mr-1.5 h-4 w-4" />Select all
-              </Button>
-              <Button type="button" variant="outline" onClick={() => setManualCopyText(null)}>Close</Button>
-              <Button type="button" onClick={() => void copyCustomerMessage(manualCopyText ?? "", "Message copied", "Ready to paste into WhatsApp")}>
-                <Copy className="mr-1.5 h-4 w-4" />Try copy again
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
