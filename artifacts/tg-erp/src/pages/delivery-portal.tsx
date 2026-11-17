@@ -273,6 +273,17 @@ function formatFoodieChallengeBlock(
       : "⏳ YOUR CHALLENGE WINDOW";
   return [
     "━━━━━━━━━━━━━━",
+    markClipboardBold("🏆 የTG የምግብ ፈተና"),
+    markClipboardBold(amharicStatus),
+    markClipboardAccent("📈 የዚህ ዙር እድገት: " + progress),
+    progressBar,
+    "",
+    markClipboardBold("⏳ የፈተናው ማብቂያ:"),
+    markClipboardTime(deadline + " (የዱባይ ሰዓት)"),
+    "",
+    markClipboardBold(amharicClosing),
+    "━━━━━━━━━━━━━━",
+    "",
     markClipboardBold("🏆 TG FOODIE CHALLENGE"),
     markClipboardBold(englishStatus),
     markClipboardAccent("📈 Your Progress: " + progress),
@@ -283,17 +294,6 @@ function formatFoodieChallengeBlock(
     markClipboardTime("🕘 Deadline: " + deadline + " Dubai Time"),
     markClipboardGold("🎟️ Code: " + (streak.streakCode || "—")),
     markClipboardBold(englishClosing),
-    "━━━━━━━━━━━━━━",
-    "",
-    markClipboardBold("🏆 የTG የምግብ ፈተና"),
-    markClipboardBold(amharicStatus),
-    markClipboardAccent("📈 የዚህ ዙር እድገት: " + progress),
-    progressBar,
-    "",
-    markClipboardBold("⏳ የፈተናው ማብቂያ:"),
-    markClipboardTime(deadline + " (የዱባይ ሰዓት)"),
-    "",
-    markClipboardBold(amharicClosing),
   ].join("\n");
 }
 
@@ -331,7 +331,7 @@ function buildDeliveryMessage(order: DeliveryOrder): string {
   const luckyPart = order.luckyNumber ? `\n🎯 Lucky Number: #${order.luckyNumber}` : "";
   const streakMessage = buildStreakMessage(order);
   const streakCopy = streakMessage ? `\n\n${streakMessage}` : "";
-  return "ቲጂ ምግብ ቤት | TG's Restaurant ✨\n\nThank you for ordering! Your meal has been delivered. 🍽️\nትዕዛዝዎ ደርሷል። እናመሰግናለን!" + luckyPart + streakCopy;
+  return "ቲጂ ምግብ ቤት | TG's Restaurant ✨\n\nትዕዛዝዎ ደርሷል። እናመሰግናለን!\nThank you for ordering! Your meal has been delivered. 🍽️" + luckyPart + streakCopy;
 }
 
 function escapeClipboardHtml(text: string): string {
